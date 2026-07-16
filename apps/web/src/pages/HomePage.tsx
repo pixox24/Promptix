@@ -5,24 +5,37 @@ import {
   MobileFilterBar,
 } from '../components/browse/FilterSidebar';
 import { TemplateGrid } from '../components/template/TemplateGrid';
-import { templates } from '../data/templates';
+import { templates as staticTemplates } from '../data/templates';
+import { fetchTemplates } from '../data/templateApi';
+import type { PromptTemplate } from '../types/prompt';
 import type { SortOption } from '../types/prompt';
 
 export function HomePage() {
   const [params, setParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
 
   const query = params.get('q') ?? '';
   const sort = (params.get('sort') as SortOption) || 'hot';
   const tagsParam = params.get('tags') ?? '';
-  const selectedTags = tagsParam ? tagsParam.split(',').filter(Boolean) : [];
+  const selectedTags = useMemo(() => tagsParam ? tagsParam.split(',').filter(Boolean) : [], [tagsParam]);
 
   useEffect(() => {
     setLoading(true);
-    const t = window.setTimeout(() => setLoading(false), 280);
+    let active = true;
+    fetchTemplates().then((items) => { if (active) setTemplates(items); })
+      .catch(() => { if (active) setTemplates(staticTemplates); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!templates.length) return;
+    setLoading(true);
+    const t = window.setTimeout(() => setLoading(false), 120);
     return () => window.clearTimeout(t);
-  }, [query, sort, tagsParam]);
+  }, [query, sort, tagsParam, templates.length]);
 
   const update = (patch: Record<string, string | null>) => {
     const next = new URLSearchParams(params);
@@ -84,7 +97,7 @@ export function HomePage() {
     }
 
     return list;
-  }, [query, sort, selectedTags]);
+  }, [query, sort, selectedTags, templates]);
 
   const sidebarProps = {
     query,

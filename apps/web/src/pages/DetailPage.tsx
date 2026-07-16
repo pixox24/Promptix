@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { categoryLabelMap } from '../data/categories';
-import { getSimilarTemplates, getTemplateById } from '../data/templates';
+import { getSimilarTemplates, getTemplateById as getStaticTemplateById } from '../data/templates';
+import { fetchTemplate } from '../data/templateApi';
+import type { PromptTemplate } from '../types/prompt';
 import { useLibrary } from '../context/UserLibraryContext';
 import { useToast } from '../context/ToastContext';
 import {
@@ -26,7 +28,8 @@ import { EmptyState } from '../components/ui/EmptyState';
 export function DetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const template = id ? getTemplateById(id) : undefined;
+  const [template, setTemplate] = useState<PromptTemplate | undefined>(() => id ? getStaticTemplateById(id) : undefined);
+  const [templateLoading, setTemplateLoading] = useState(true);
   const { isFavorite, toggleFavorite, addRecent, saveDraft } = useLibrary();
   const { toast } = useToast();
 
@@ -34,6 +37,16 @@ export function DetailPage() {
   const [manualPrompt, setManualPrompt] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [generating, setGenerating] = useState(false);
+
+  useEffect(() => {
+    if (!id) { setTemplateLoading(false); return; }
+    let active = true;
+    setTemplateLoading(true);
+    fetchTemplate(id).then((value) => { if (active) setTemplate(value); })
+      .catch(() => { if (active) setTemplate(getStaticTemplateById(id)); })
+      .finally(() => { if (active) setTemplateLoading(false); });
+    return () => { active = false; };
+  }, [id]);
 
   useEffect(() => {
     if (template) {
@@ -50,6 +63,10 @@ export function DetailPage() {
   );
 
   const prompt = manualPrompt ?? autoPrompt;
+
+  if (templateLoading && !template) {
+    return <div className="mx-auto max-w-6xl px-4 py-16 text-center text-sm text-gray-400">正在加载模板…</div>;
+  }
 
   if (!template) {
     return (

@@ -6,6 +6,7 @@ import { DetailPage } from './pages/DetailPage';
 import { HomePage } from './pages/HomePage';
 import { LibraryPage } from './pages/LibraryPage';
 import { MyPromptsPage } from './pages/MyPromptsPage';
+import { AdminPage } from './pages/AdminPage';
 
 export default function App() {
   return (
@@ -13,6 +14,7 @@ export default function App() {
       <ToastProvider>
         <UserLibraryProvider>
           <Routes>
+            <Route path="admin/*" element={<AdminPage />} />
             <Route element={<Layout />}>
               <Route index element={<HomePage />} />
               <Route path="library" element={<LibraryPage />} />

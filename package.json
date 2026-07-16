@@ -1,28 +1,30 @@
 {
-  "name": "promptix",
+  "name": "promptix-monorepo",
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "oxlint",
-    "preview": "vite preview"
+    "predev": "npm run build -w @promptix/shared",
+    "dev": "concurrently -k -n shared,web,api,worker -c yellow,cyan,green,magenta \"npm run dev -w @promptix/shared\" \"npm:dev:web\" \"npm:dev:api\" \"npm:dev:worker\"",
+    "dev:web": "npm run dev -w @promptix/web",
+    "dev:api": "npm run dev -w @promptix/api",
+    "dev:worker": "npm run dev -w @promptix/worker",
+    "build": "npm run build -w @promptix/shared && npm run build -w @promptix/web && npm run build -w @promptix/api && npm run build -w @promptix/worker",
+    "build:web": "npm run build -w @promptix/web",
+    "lint": "npm run lint -w @promptix/web",
+    "test": "npm run test -w @promptix/shared && npm run test -w @promptix/worker",
+    "db:generate": "npm run db:generate -w @promptix/api",
+    "db:migrate": "npm run db:migrate -w @promptix/api",
+    "db:seed": "npm run db:seed -w @promptix/api"
   },
-  "dependencies": {
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "react-router-dom": "^7.18.1"
+  "engines": {
+    "node": ">=20.19.0"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.2",
-    "@types/node": "^24.13.2",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
-    "oxlint": "^1.71.0",
-    "tailwindcss": "^4.3.2",
-    "typescript": "~6.0.2",
-    "vite": "^8.1.1"
+    "concurrently": "^9.2.1"
   }
 }

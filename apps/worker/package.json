@@ -1,0 +1,24 @@
+{
+  "name": "@promptix/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@promptix/shared": "*",
+    "bullmq": "^5.80.5",
+    "drizzle-orm": "^0.44.7",
+    "postgres": "^3.4.9",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.2",
+    "tsx": "^4.20.3",
+    "typescript": "~5.8.3"
+  }
+}

@@ -1,0 +1,1 @@
+CREATE INDEX "prompt_templates_tags_gin_idx" ON "prompt_templates" USING gin ("tags");

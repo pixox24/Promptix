@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: promptix-postgres
+    restart: unless-stopped
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: promptix
+      POSTGRES_PASSWORD: promptix
+      POSTGRES_DB: promptix
+    volumes:
+      - promptix_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U promptix -d promptix']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: promptix-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - promptix_redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  promptix_pg_data:
+  promptix_redis_data:
