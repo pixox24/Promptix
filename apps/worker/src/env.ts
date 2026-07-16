@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { parseRedisConnection } from '@promptix/shared';
 
 export function loadEnvFile() {
   for (const file of [path.resolve(process.cwd(), '.env'), path.resolve(process.cwd(), '../../.env')]) {
@@ -20,6 +21,5 @@ export function required(name:string) {
 }
 
 export function redisConnection() {
-  const url=new URL(process.env.REDIS_URL??'redis://localhost:6379');
-  return {host:url.hostname,port:Number(url.port||6379),username:url.username||undefined,password:url.password||undefined,...(url.protocol==='rediss:'?{tls:{}}:{})};
+  return parseRedisConnection(process.env.REDIS_URL??'redis://localhost:6379');
 }

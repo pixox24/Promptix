@@ -74,7 +74,7 @@ test('AI SDK produces and normalizes a TemplateDraft', async () => {
   }
 });
 
-test('vision model sends an AI SDK image content part', async () => {
+test('vision model sends an AI SDK file part without deprecated image warnings', async () => {
   process.env.TEST_DEEPSEEK_API_KEY = 'test-key';
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, init) => {

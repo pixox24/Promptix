@@ -1,11 +1,15 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import {
   modelCapabilitySchema,
   providerAdapterSchema,
   type JobType,
 } from '@promptix/shared';
 import { db, providerModels, providers } from './db.js';
-import { roleForJob, type ModelRole } from './model-routing.js';
+import {
+  roleForJob,
+  selectLegacyModel,
+  type ModelRole,
+} from './model-routing.js';
 import type { ResolvedModel } from './model-types.js';
 
 function parseResolved(row: {
@@ -37,8 +41,8 @@ async function byModelId(modelId: string) {
   return row ? parseResolved(row) : null;
 }
 
-async function byLegacyProviderId(providerId: string) {
-  const [row] = await db.select({ provider: providers, model: providerModels })
+async function byLegacyProviderId(providerId: string, jobType: JobType) {
+  const rows = await db.select({ provider: providers, model: providerModels })
     .from(providerModels)
     .innerJoin(providers, eq(providerModels.providerId, providers.id))
     .where(and(
@@ -46,9 +50,18 @@ async function byLegacyProviderId(providerId: string) {
       eq(providerModels.enabled, true),
       eq(providers.enabled, true),
     ))
-    .orderBy(desc(providerModels.updatedAt))
-    .limit(1);
-  return row ? parseResolved(row) : null;
+    .orderBy(asc(providerModels.createdAt));
+  if (!rows.length) return null;
+
+  const resolved = rows.map(parseResolved);
+  const selected = selectLegacyModel(
+    resolved.map((row) => row.model),
+    jobType,
+    resolved[0].provider.defaultModel,
+  );
+  return selected
+    ? resolved.find((row) => row.model.id === selected.id) ?? null
+    : null;
 }
 
 async function byDefaultRole(role: ModelRole) {
@@ -79,7 +92,7 @@ export async function resolvePrimaryModel(
   const resolved = modelId
     ? await byModelId(modelId)
     : providerId
-      ? await byLegacyProviderId(providerId)
+      ? await byLegacyProviderId(providerId, jobType)
       : await byDefaultRole(role);
   if (!resolved) {
     throw new Error(modelId

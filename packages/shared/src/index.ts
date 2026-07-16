@@ -2,6 +2,25 @@ import { z } from 'zod';
 
 export const PROMPTIX_VERSION = '0.0.0' as const;
 
+export function parseRedisConnection(redisUrl: string) {
+  const url = new URL(redisUrl);
+  if (url.protocol !== 'redis:' && url.protocol !== 'rediss:') {
+    throw new Error('Redis URL must use redis: or rediss:');
+  }
+  const databaseText = url.pathname.replace(/^\//, '');
+  if (databaseText && !/^\d+$/.test(databaseText)) {
+    throw new Error('Redis URL database number must be a non-negative integer');
+  }
+  return {
+    host: url.hostname,
+    port: Number(url.port || 6379),
+    username: url.username ? decodeURIComponent(url.username) : undefined,
+    password: url.password ? decodeURIComponent(url.password) : undefined,
+    ...(databaseText ? { db: Number(databaseText) } : {}),
+    ...(url.protocol === 'rediss:' ? { tls: {} } : {}),
+  };
+}
+
 /** Variable types for modular prompts */
 export const variableTypeSchema = z.enum([
   'text',
@@ -112,6 +131,22 @@ export const modelCapabilitySchema = z.enum([
 ]);
 export type ModelCapability = z.infer<typeof modelCapabilitySchema>;
 
+export function providerAdapterCapabilityError(
+  adapterType: ProviderAdapter,
+  capabilities: ModelCapability[],
+) {
+  const values = new Set(capabilities);
+  if (adapterType === 'custom_65535_async') {
+    if (!values.has('image') || [...values].some((value) => value !== 'image')) {
+      return 'custom_65535_async only supports image capability';
+    }
+  }
+  if ((adapterType === 'anthropic' || adapterType === 'deepseek') && values.has('image')) {
+    return `${adapterType} adapter does not provide image models`;
+  }
+  return null;
+}
+
 const providerOptionsSchema = z.record(z.record(z.unknown()));
 
 export const modelDefaultsSchema = z.object({
@@ -147,6 +182,21 @@ export const providerModelInputSchema = z.object({
   isDefaultImage: z.boolean().default(false),
 }).superRefine((value, ctx) => {
   const capabilities = new Set(value.capabilities);
+  if (!value.enabled &&
+      (value.isDefaultText || value.isDefaultVision || value.isDefaultImage)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['enabled'],
+      message: 'A disabled model cannot hold a default role',
+    });
+  }
+  if (capabilities.has('structured_output') && !capabilities.has('text')) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['capabilities'],
+      message: 'structured_output capability requires text capability',
+    });
+  }
   if (value.isDefaultText &&
       (!capabilities.has('text') || !capabilities.has('structured_output'))) {
     ctx.addIssue({

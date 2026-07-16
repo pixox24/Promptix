@@ -30,6 +30,7 @@ export const providerModels = pgTable('provider_models', {
   isDefaultText: boolean('is_default_text').notNull(),
   isDefaultVision: boolean('is_default_vision').notNull(),
   isDefaultImage: boolean('is_default_image').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }),
 });
 

@@ -16,7 +16,7 @@
     "build": "npm run build -w @promptix/shared && npm run build -w @promptix/web && npm run build -w @promptix/api && npm run build -w @promptix/worker",
     "build:web": "npm run build -w @promptix/web",
     "lint": "npm run lint -w @promptix/web",
-    "test": "npm run test -w @promptix/shared && npm run test -w @promptix/worker",
+    "test": "npm run test -w @promptix/shared && npm run test -w @promptix/api && npm run test -w @promptix/worker",
     "db:generate": "npm run db:generate -w @promptix/api",
     "db:migrate": "npm run db:migrate -w @promptix/api",
     "db:seed": "npm run db:seed -w @promptix/api"

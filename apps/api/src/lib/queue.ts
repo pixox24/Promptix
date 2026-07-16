@@ -1,17 +1,11 @@
 import { Queue } from 'bullmq';
+import { parseRedisConnection } from '@promptix/shared';
 import { loadEnv } from '../config/env.js';
 
 export const QUEUE_NAME = 'promptix-jobs';
 
 export function redisConnection() {
-  const url = new URL(loadEnv().REDIS_URL);
-  return {
-    host: url.hostname,
-    port: Number(url.port || 6379),
-    username: url.username || undefined,
-    password: url.password || undefined,
-    ...(url.protocol === 'rediss:' ? { tls: {} } : {}),
-  };
+  return parseRedisConnection(loadEnv().REDIS_URL);
 }
 
 let queue: Queue | null = null;

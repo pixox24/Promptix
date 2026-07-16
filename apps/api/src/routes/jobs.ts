@@ -1,7 +1,11 @@
 import { Hono, type Context } from 'hono';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { jobTypeSchema, type JobType } from '@promptix/shared';
+import {
+  jobTypeSchema,
+  modelCapabilitySchema,
+  type JobType,
+} from '@promptix/shared';
 import { getDb } from '../db/client.js';
 import { generationJobs, mediaObjects, providerModels, providers, promptTemplates } from '../db/schema.js';
 import { requireAdmin, type AdminVars } from '../lib/auth.js';
@@ -9,6 +13,15 @@ import { fail, ok } from '../lib/response.js';
 import { getJobQueue, QUEUE_NAME } from '../lib/queue.js';
 import { loadEnv } from '../config/env.js';
 import { putObject, storageKind } from '../lib/storage.js';
+import {
+  clearTerminalQueueJobForRetry,
+  QueueJobStillRunningError,
+} from '../lib/job-retry.js';
+import {
+  defaultRoleForJob,
+  selectLegacyModelCandidate,
+  supportsJobType,
+} from '../lib/job-model-selection.js';
 
 const jobInput = z.object({
   type: jobTypeSchema,
@@ -19,32 +32,87 @@ const jobInput = z.object({
 });
 
 async function enqueue(jobId:string) {
-  const q=await getJobQueue().add('execute',{jobId},{jobId,attempts:loadEnv().JOB_ATTEMPTS,backoff:{type:'exponential',delay:1000},removeOnComplete:100,removeOnFail:500});
-  await getDb().update(generationJobs).set({status:'queued',queueName:QUEUE_NAME,bullJobId:q.id}).where(eq(generationJobs.id,jobId));
+  await getDb().update(generationJobs).set({
+    status:'queued',
+    queueName:QUEUE_NAME,
+    bullJobId:jobId,
+  }).where(eq(generationJobs.id,jobId));
+  await getJobQueue().add('execute',{jobId},{jobId,attempts:loadEnv().JOB_ATTEMPTS,backoff:{type:'exponential',delay:1000},removeOnComplete:100,removeOnFail:500});
 }
 
 async function validatedModel(jobType: JobType, modelId?: string, legacyProviderId?: string) {
-  if (!modelId) return { modelId: undefined, providerId: legacyProviderId };
+  const role = defaultRoleForJob(jobType);
+  if (!role) return { modelId: undefined, providerId: undefined };
+
+  if (modelId) {
+    const [row] = await getDb().select({
+      model: providerModels,
+      providerEnabled: providers.enabled,
+    }).from(providerModels)
+      .innerJoin(providers, eq(providerModels.providerId, providers.id))
+      .where(eq(providerModels.id, modelId))
+      .limit(1);
+    if (!row) throw new Error('MODEL_NOT_FOUND');
+    if (!row.model.enabled || !row.providerEnabled) throw new Error('MODEL_DISABLED');
+    if (legacyProviderId && legacyProviderId !== row.model.providerId) {
+      throw new Error('MODEL_PROVIDER_MISMATCH');
+    }
+    const candidate = {
+      ...row.model,
+      capabilities: modelCapabilitySchema.array().parse(row.model.capabilities),
+    };
+    if (!supportsJobType(candidate, jobType)) throw new Error('MODEL_CAPABILITY_MISMATCH');
+    return { modelId: row.model.id, providerId: row.model.providerId };
+  }
+
+  if (legacyProviderId) {
+    const [provider] = await getDb().select({
+      id: providers.id,
+      enabled: providers.enabled,
+      defaultModel: providers.defaultModel,
+    }).from(providers).where(eq(providers.id, legacyProviderId)).limit(1);
+    if (!provider) throw new Error('PROVIDER_NOT_FOUND');
+    if (!provider.enabled) throw new Error('MODEL_DISABLED');
+
+    const models = await getDb().select().from(providerModels)
+      .where(and(
+        eq(providerModels.providerId, legacyProviderId),
+        eq(providerModels.enabled, true),
+      ))
+      .orderBy(asc(providerModels.createdAt));
+    const candidates = models.map((model) => ({
+      ...model,
+      capabilities: modelCapabilitySchema.array().parse(model.capabilities),
+    }));
+    const selected = selectLegacyModelCandidate(
+      candidates,
+      jobType,
+      provider.defaultModel,
+    );
+    if (!selected) throw new Error('MODEL_CAPABILITY_MISMATCH');
+    return { modelId: selected.id, providerId: selected.providerId };
+  }
+
+  const roleColumn = role === 'text'
+    ? providerModels.isDefaultText
+    : providerModels.isDefaultImage;
   const [row] = await getDb().select({
     model: providerModels,
     providerEnabled: providers.enabled,
   }).from(providerModels)
     .innerJoin(providers, eq(providerModels.providerId, providers.id))
-    .where(eq(providerModels.id, modelId))
+    .where(and(
+      eq(roleColumn, true),
+      eq(providerModels.enabled, true),
+      eq(providers.enabled, true),
+    ))
     .limit(1);
-  if (!row) throw new Error('MODEL_NOT_FOUND');
-  if (!row.model.enabled || !row.providerEnabled) throw new Error('MODEL_DISABLED');
-  if (legacyProviderId && legacyProviderId !== row.model.providerId) {
-    throw new Error('MODEL_PROVIDER_MISMATCH');
-  }
-  const capabilities = new Set(row.model.capabilities);
-  if (jobType === 'image_generate' && !capabilities.has('image')) {
-    throw new Error('MODEL_CAPABILITY_MISMATCH');
-  }
-  if (['text_expand', 'structure', 'image_reverse'].includes(jobType) &&
-      (!capabilities.has('text') || !capabilities.has('structured_output'))) {
-    throw new Error('MODEL_CAPABILITY_MISMATCH');
-  }
+  if (!row) throw new Error('DEFAULT_MODEL_NOT_CONFIGURED');
+  const candidate = {
+    ...row.model,
+    capabilities: modelCapabilitySchema.array().parse(row.model.capabilities),
+  };
+  if (!supportsJobType(candidate, jobType)) throw new Error('MODEL_CAPABILITY_MISMATCH');
   return { modelId: row.model.id, providerId: row.model.providerId };
 }
 
@@ -53,12 +121,16 @@ function modelValidationFailure(c: Context, error: unknown) {
   switch (code) {
     case 'MODEL_NOT_FOUND':
       return fail(c, code, 'Model not found', 404);
+    case 'PROVIDER_NOT_FOUND':
+      return fail(c, code, 'Provider not found', 404);
     case 'MODEL_DISABLED':
       return fail(c, code, 'Model or provider is disabled', 409);
     case 'MODEL_PROVIDER_MISMATCH':
       return fail(c, code, 'modelId and providerId refer to different providers', 409);
     case 'MODEL_CAPABILITY_MISMATCH':
       return fail(c, code, 'Model does not support this job type', 409);
+    case 'DEFAULT_MODEL_NOT_CONFIGURED':
+      return fail(c, code, 'No enabled default model is configured for this job type', 409);
     default:
       throw error;
   }
@@ -136,8 +208,19 @@ jobRoutes.post('/:id/retry',async(c)=>{
   const id=c.req.param('id'); const [row]=await getDb().select().from(generationJobs).where(eq(generationJobs.id,id)).limit(1);
   if(!row)return fail(c,'NOT_FOUND','Job not found',404);
   if(!['failed','cancelled'].includes(row.status))return fail(c,'NOT_RETRYABLE','Only failed or cancelled jobs can be retried',409);
+  try {
+    await clearTerminalQueueJobForRetry(getJobQueue(), row.bullJobId ?? id);
+  } catch (error) {
+    if (error instanceof QueueJobStillRunningError) {
+      return fail(c, 'QUEUE_JOB_STILL_RUNNING', error.message, 409);
+    }
+    return fail(c, 'QUEUE_UNAVAILABLE', 'Redis queue is unavailable', 503);
+  }
   await getDb().update(generationJobs).set({status:'pending',errorMessage:null,startedAt:null,finishedAt:null}).where(eq(generationJobs.id,id));
-  try{await enqueue(id);}catch{return fail(c,'QUEUE_UNAVAILABLE','Redis queue is unavailable',503);}
+  try{await enqueue(id);}catch(e){
+    await getDb().update(generationJobs).set({status:'failed',errorMessage:e instanceof Error?e.message:'Queue unavailable',finishedAt:new Date()}).where(eq(generationJobs.id,id));
+    return fail(c,'QUEUE_UNAVAILABLE','Redis queue is unavailable',503);
+  }
   return ok(c,{jobId:id,status:'queued'},202);
 });
 

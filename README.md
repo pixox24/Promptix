@@ -63,16 +63,18 @@ npm run build
 | `/admin/templates` | 模板 CMS、封面、发布/下架 |
 | `/admin/ingest` | 图片反推、文本扩写 |
 | `/admin/jobs` | 异步任务与重试 |
-| `/admin/providers` | OpenAI 兼容 Provider 配置 |
+| `/admin/providers` | Provider 连接与多 Model、能力及默认用途配置 |
 
 ## 阶段 A 能力
 
 - 管理员 JWT HttpOnly Cookie 登录与受保护后台。
 - 模板 CRUD、变量编辑、封面上传；无封面发布固定返回 `409 COVER_REQUIRED`。
 - 文本扩写、图片反推、生图均通过 BullMQ 异步执行，任务可查询和重试。
-- Provider 的协议、Base URL、模型和密钥环境变量名可配置，密钥本身不写入数据库。
-- `openai_images_async` 支持 65535.space 等 OpenAI Images 异步网关：自动提交、轮询并保存厂商任务元数据。
-- `deepseek_chat` 支持 DeepSeek 文本扩写与提示词结构化；图片反推采用“视觉 Provider 描述 → DeepSeek 优化”的两阶段链路。
+- Provider 只保存 Adapter、Base URL、认证方式和密钥环境变量名；一个 Provider 可以管理多个 Model，密钥值不写入数据库。
+- Model 独立声明 `text`、`structured_output`、`vision`、`image` 能力，并可分别指定默认文本、默认视觉和默认生图模型。
+- 文本、结构化输出、视觉理解和标准同步生图统一使用 Vercel AI SDK 7；OpenAI-compatible、OpenAI、Anthropic、Google 与 DeepSeek 都通过固定 Adapter 工厂创建，不动态加载数据库代码。
+- `custom_65535_async` 保留显式提交与轮询协议，保存 `providerJobId`、过期时间、成本和尺寸档位等厂商元数据。
+- 新任务以 `modelId` 选型并同步保存 `providerId`；仅含旧 `providerId` 的历史任务仍可解析和重试。
 - 已发布模板由公开 API `/api/templates` 提供给前台；API 不可见时开发环境回退静态模板。
 - OSS 永久对象使用 `public/`，试跑/输入使用 `temp/`；`temp/` 应配置 7 天生命周期。
 
@@ -94,3 +96,12 @@ npm run build
 - Node.js 22（`.nvmrc` 固定为 `22`，项目 engine 要求 `>=22.0.0`）。
 - Docker Desktop 或兼容 Docker Engine（用于 PostgreSQL/Redis）。
 - 生产环境必须设置强 `JWT_SECRET`、`COOKIE_SECURE=true`，并使用 HTTPS。
+
+## Provider / Model 快速配置
+
+1. 在 `.env` 填写实际密钥，例如 `DEEPSEEK_API_KEY` 或 `IMAGE_65535_API_KEY`。
+2. 在 `/admin/providers` 创建 Provider；数据库只保存上述环境变量名。
+3. 在该 Provider 下添加一个或多个 Model，声明真实能力和调用默认值。
+4. 为业务至少配置一个默认文本模型；需要生图或图片反推时，再分别配置默认生图、默认视觉模型。
+
+升级已有部署前先备份 PostgreSQL，再执行 `npm run db:migrate`。迁移会新增 `provider_models` 和 `generation_jobs.model_id` 并回填旧数据，不删除旧 Provider/Job 兼容字段。详细验证与回滚步骤见 [运维手册](docs/ops.md)。

@@ -1,6 +1,13 @@
 import type { JobType, ModelCapability } from '@promptix/shared';
 
 type CapabilityModel = { name: string; capabilities: ModelCapability[] };
+type LegacyModelCandidate = CapabilityModel & {
+  id: string;
+  modelId: string;
+  isDefaultText: boolean;
+  isDefaultVision: boolean;
+  isDefaultImage: boolean;
+};
 export type ModelRole = 'text' | 'vision' | 'image';
 
 export function roleForJob(jobType: JobType): ModelRole | null {
@@ -29,6 +36,34 @@ export function assertCapabilitiesForJob(model: CapabilityModel, jobType: JobTyp
       throw new Error(`Model ${model.name} lacks text or structured_output capability`);
     }
   }
+}
+
+export function supportsJob(model: CapabilityModel, jobType: JobType) {
+  try {
+    assertCapabilitiesForJob(model, jobType);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function selectLegacyModel<T extends LegacyModelCandidate>(
+  candidates: T[],
+  jobType: JobType,
+  legacyDefaultModelId: string,
+) {
+  const compatible = candidates.filter((candidate) => supportsJob(candidate, jobType));
+  const role = roleForJob(jobType);
+  if (!role) return undefined;
+
+  return compatible.find((candidate) =>
+    Boolean(legacyDefaultModelId) && candidate.modelId === legacyDefaultModelId)
+    ?? compatible.find((candidate) => role === 'text'
+      ? candidate.isDefaultText
+      : role === 'vision'
+        ? candidate.isDefaultVision
+        : candidate.isDefaultImage)
+    ?? compatible[0];
 }
 
 export function imageReverseNeedsVisionFallback(model: CapabilityModel) {

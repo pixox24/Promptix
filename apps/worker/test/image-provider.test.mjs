@@ -60,9 +60,11 @@ test('65535 async protocol submits then polls until done', async () => {
       assert.equal(url, 'https://img-cn.65535.space/v1/images/generations');
       assert.equal(init.headers['X-Async-Mode'], 'true');
       assert.equal(init.headers['X-Async-Image-Max-Queue-Sec'], '120');
+      assert.equal(init.signal instanceof AbortSignal, true);
       return new Response(JSON.stringify({ job_id: 'img_test', status: 'pending', status_url: '/v1/images/async-generations/img_test' }), { status: 202 });
     }
     assert.equal(url, 'https://img-cn.65535.space/v1/images/async-generations/img_test');
+    assert.equal(init.signal instanceof AbortSignal, true);
     return new Response(JSON.stringify({ code: 0, message: 'success', data: { status: 'done', result_urls: ['https://image.65535.space/result.png'], expires_at: '2026-07-17T00:00:00Z', cost_usd: 0.18, image_size_tier: '2K' } }), { status: 200 });
   };
   try {
@@ -77,5 +79,30 @@ test('65535 async protocol submits then polls until done', async () => {
     assert.equal(result.providerJobId, 'img_test');
     assert.equal(result.costUsd, 0.18);
     assert.equal(calls, 2);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('65535 async polling rejects a cross-origin status URL before sending credentials', async () => {
+  process.env.TEST_IMAGE_API_KEY = 'test-key';
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls > 1) throw new Error('credentials were sent cross-origin');
+    return new Response(JSON.stringify({
+      job_id: 'img_cross_origin',
+      status: 'pending',
+      status_url: 'https://untrusted.example/jobs/img_cross_origin',
+    }), { status: 202 });
+  };
+  try {
+    await assert.rejects(
+      () => generateImage({
+        provider: { ...provider, adapterType: 'custom_65535_async' },
+        model,
+      }, { prompt: 'a blue cube' }),
+      /same origin/,
+    );
+    assert.equal(calls, 1);
   } finally { globalThis.fetch = originalFetch; }
 });

@@ -29,6 +29,9 @@ export async function generateAsyncImage(config: ResolvedModel, input: JsonRecor
   const prompt = typeof input.prompt === 'string' ? input.prompt : '';
   if (!prompt) throw new Error('input.prompt is required');
   const defaults = normalizeModelDefaults(config.provider.adapterType, config.model.defaults);
+  const timeoutMs = Math.min(3600000, Math.max(10000, defaults.async.timeoutMs ?? 900000));
+  const deadline = Date.now() + timeoutMs;
+  const requestSignal = () => AbortSignal.timeout(Math.max(1, deadline - Date.now()));
   const headers: Record<string, string> = {
     ...authHeaders(config),
     'X-Async-Mode': 'true',
@@ -52,6 +55,7 @@ export async function generateAsyncImage(config: ResolvedModel, input: JsonRecor
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+    signal: requestSignal(),
   });
   if (!response.ok) {
     throw new Error(`Image provider ${response.status}: ${(await response.text()).slice(0, 500)}`);
@@ -65,11 +69,15 @@ export async function generateAsyncImage(config: ResolvedModel, input: JsonRecor
   const statusUrl = accepted.status_url
     ? new URL(accepted.status_url, config.provider.baseUrl).toString()
     : endpoint(config.provider.baseUrl, `/images/async-generations/${accepted.job_id}`);
+  if (new URL(statusUrl).origin !== new URL(config.provider.baseUrl).origin) {
+    throw new Error('Async image status URL must use the same origin as the provider');
+  }
   const pollMs = Math.min(10000, Math.max(250, defaults.async.pollIntervalMs ?? 2000));
-  const timeoutMs = Math.min(3600000, Math.max(10000, defaults.async.timeoutMs ?? 900000));
-  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const polled = await fetch(statusUrl, { headers: authHeaders(config) });
+    const polled = await fetch(statusUrl, {
+      headers: authHeaders(config),
+      signal: requestSignal(),
+    });
     if (!polled.ok) {
       throw new Error(`Image job polling ${polled.status}: ${(await polled.text()).slice(0, 500)}`);
     }
@@ -105,7 +113,10 @@ export async function generateAsyncImage(config: ResolvedModel, input: JsonRecor
     if (data?.status === 'failed') {
       throw new Error(`${data.error_code ?? 'image_failed'}: ${data.error_message ?? 'Image generation failed'}`);
     }
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    const remainingMs = deadline - Date.now();
+    if (remainingMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, remainingMs)));
+    }
   }
   throw new Error(`Image generation timed out after ${Math.round(timeoutMs / 1000)} seconds (provider job ${accepted.job_id} may still be running)`);
 }

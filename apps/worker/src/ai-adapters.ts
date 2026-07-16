@@ -22,13 +22,19 @@ const generatedDraftSchema = templateDraftSchema.extend({
 });
 
 async function inlineImage(imageUrl: string) {
-  if (imageUrl.startsWith('data:')) return imageUrl;
+  if (imageUrl.startsWith('data:')) {
+    const match = imageUrl.match(/^data:([^;,]+);base64,(.+)$/s);
+    if (!match) throw new Error('Source image data URL must use base64 encoding');
+    const bytes = Buffer.from(match[2], 'base64');
+    if (bytes.length > 10 * 1024 * 1024) throw new Error('Source image exceeds 10MB');
+    return { data: match[2], mediaType: match[1] };
+  }
   const response = await fetch(imageUrl);
   if (!response.ok) throw new Error(`Unable to read source image (${response.status})`);
   const bytes = Buffer.from(await response.arrayBuffer());
   if (bytes.length > 10 * 1024 * 1024) throw new Error('Source image exceeds 10MB');
   const mime = response.headers.get('content-type')?.split(';')[0] || 'image/png';
-  return `data:${mime};base64,${bytes.toString('base64')}`;
+  return { data: bytes.toString('base64'), mediaType: mime };
 }
 
 function normalizeDraft(output: z.infer<typeof generatedDraftSchema>): TemplateDraft {
@@ -64,16 +70,19 @@ export async function structurePrompt(
     ...defaults.language,
   };
   const result = imageUrl
-    ? await generateText({
+    ? await (async () => {
+        const image = await inlineImage(imageUrl);
+        return generateText({
         ...common,
         messages: [{
           role: 'user',
           content: [
             { type: 'text', text: '请从参考图反推一个可复用的中文 AI 绘图提示词模板。' },
-            { type: 'image', image: await inlineImage(imageUrl) },
+            { type: 'file', data: image.data, mediaType: image.mediaType },
           ],
         }],
-      })
+        });
+      })()
     : await generateText({
         ...common,
         prompt: `请优化并结构化以下需求，输出可复用的中文 AI 绘图提示词模板：\n${text}`,
@@ -86,6 +95,7 @@ export async function describeImage(config: ResolvedModel, imageUrl: string) {
     throw new Error(`Model ${config.model.name} lacks vision capability`);
   }
   const defaults = normalizeModelDefaults(config.provider.adapterType, config.model.defaults);
+  const image = await inlineImage(imageUrl);
   const result = await generateText({
     model: createLanguageModel(config),
     system: '你是专业视觉分析师。详细描述图片的主体、构图、镜头、光线、材质、色彩、风格、文字和空间关系，供另一个模型重建绘图提示词。不要省略细节。',
@@ -93,7 +103,7 @@ export async function describeImage(config: ResolvedModel, imageUrl: string) {
       role: 'user',
       content: [
         { type: 'text', text: '请完整分析这张参考图。' },
-        { type: 'image', image: await inlineImage(imageUrl) },
+        { type: 'file', data: image.data, mediaType: image.mediaType },
       ],
     }],
     maxRetries: 2,

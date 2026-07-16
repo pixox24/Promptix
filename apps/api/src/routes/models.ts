@@ -4,12 +4,15 @@ import { z } from 'zod';
 import {
   modelCapabilitySchema,
   modelDefaultsSchema,
+  providerAdapterCapabilityError,
+  providerAdapterSchema,
   providerModelInputSchema,
 } from '@promptix/shared';
 import { getDb } from '../db/client.js';
 import { generationJobs, providerModels, providers } from '../db/schema.js';
 import { requireAdmin, type AdminVars } from '../lib/auth.js';
 import { fail, ok } from '../lib/response.js';
+import { hasDefaultRole, modelIdentityChangeError } from '../lib/model-policy.js';
 
 const modelPatchSchema = z.object({
   providerId: z.string().uuid().optional(),
@@ -23,12 +26,18 @@ const modelPatchSchema = z.object({
   isDefaultImage: z.boolean().optional(),
 });
 
-async function providerExists(providerId: string) {
-  const [provider] = await getDb().select({ id: providers.id })
+async function providerConnection(providerId: string) {
+  const [provider] = await getDb().select({
+    id: providers.id,
+    enabled: providers.enabled,
+    adapterType: providers.adapterType,
+  })
     .from(providers)
     .where(eq(providers.id, providerId))
     .limit(1);
-  return Boolean(provider);
+  return provider
+    ? { ...provider, adapterType: providerAdapterSchema.parse(provider.adapterType) }
+    : null;
 }
 
 export const modelRoutes = new Hono<AdminVars>();
@@ -70,8 +79,19 @@ modelRoutes.post('/', async (c) => {
   if (!parsed.success) {
     return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid model', 400);
   }
-  if (!(await providerExists(parsed.data.providerId))) {
+  const provider = await providerConnection(parsed.data.providerId);
+  if (!provider) {
     return fail(c, 'PROVIDER_NOT_FOUND', 'Provider not found', 404);
+  }
+  const compatibilityError = providerAdapterCapabilityError(
+    provider.adapterType,
+    parsed.data.capabilities,
+  );
+  if (compatibilityError) {
+    return fail(c, 'MODEL_ADAPTER_CAPABILITY_MISMATCH', compatibilityError, 400);
+  }
+  if (hasDefaultRole(parsed.data) && !provider.enabled) {
+    return fail(c, 'DEFAULT_PROVIDER_DISABLED', 'Enable the provider before assigning a default role', 409);
   }
   try {
     const row = await getDb().transaction(async (tx) => {
@@ -109,16 +129,28 @@ modelRoutes.patch('/:id', async (c) => {
     .limit(1);
   if (!existing) return fail(c, 'NOT_FOUND', 'Model not found', 404);
 
+  const identityError = modelIdentityChangeError(existing, patch.data);
+  if (identityError) {
+    return fail(c, 'MODEL_IDENTITY_IMMUTABLE', identityError, 409);
+  }
+
   const merged = providerModelInputSchema.safeParse({ ...existing, ...patch.data });
   if (!merged.success) {
     return fail(c, 'VALIDATION_ERROR', merged.error.issues[0]?.message ?? 'Invalid model', 400);
   }
-  if (!merged.data.enabled &&
-      (merged.data.isDefaultText || merged.data.isDefaultVision || merged.data.isDefaultImage)) {
-    return fail(c, 'DEFAULT_MODEL_DISABLE_FORBIDDEN', 'Reassign default roles before disabling this model', 409);
-  }
-  if (!(await providerExists(merged.data.providerId))) {
+  const provider = await providerConnection(merged.data.providerId);
+  if (!provider) {
     return fail(c, 'PROVIDER_NOT_FOUND', 'Provider not found', 404);
+  }
+  const compatibilityError = providerAdapterCapabilityError(
+    provider.adapterType,
+    merged.data.capabilities,
+  );
+  if (compatibilityError) {
+    return fail(c, 'MODEL_ADAPTER_CAPABILITY_MISMATCH', compatibilityError, 400);
+  }
+  if (hasDefaultRole(merged.data) && !provider.enabled) {
+    return fail(c, 'DEFAULT_PROVIDER_DISABLED', 'Enable the provider before assigning a default role', 409);
   }
 
   try {

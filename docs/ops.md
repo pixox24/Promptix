@@ -17,6 +17,47 @@
 
 `STORAGE_DRIVER=auto` 在 OSS 凭据完整时使用 OSS，否则回退到本地 `apps/api/.tmp/uploads`，该回退只适合开发与单机验收。
 
+## Provider 与 Model 运维
+
+- Provider 是连接配置：Adapter、Base URL、认证方式和密钥环境变量名。
+- Model 是可执行配置：厂商 Model ID、能力、默认用途和调用默认值。一个 Provider 可以包含多个 Model。
+- 默认文本模型必须具备 `text + structured_output`；默认视觉模型必须具备 `vision`；默认生图模型必须具备 `image`。
+- `openai_compatible`、`openai`、`anthropic`、`google`、`deepseek` 的标准能力由 AI SDK 7 执行；`custom_65535_async` 仅用于异步生图。
+- API 与 Worker 必须获得同名密钥环境变量。后台只显示密钥是否已配置，不返回密钥值。
+
+新任务会同时保存 `model_id` 与所属 `provider_id`。旧客户端仍可暂时只传 `providerId`；系统会优先选择该 Provider 的旧默认模型、相应角色默认模型，再选择首个能力兼容模型。
+
+## 升级与迁移验收
+
+升级前先停止写入并执行可恢复备份：
+
+```bash
+pg_dump -Fc promptix > promptix-before-model-registry.dump
+npm ci
+npm run db:migrate
+```
+
+迁移是加法迁移：新增 `provider_models`、`providers.adapter_type` 和 `generation_jobs.model_id`，保留 `providers.kind/protocol/default_model/defaults/is_default` 与 `generation_jobs.provider_id`。完成后检查：
+
+```sql
+SELECT count(*) AS providers_without_model
+FROM providers p
+LEFT JOIN provider_models pm ON pm.provider_id = p.id
+WHERE pm.id IS NULL;
+
+SELECT count(*) AS provider_jobs_without_model
+FROM generation_jobs
+WHERE provider_id IS NOT NULL AND model_id IS NULL;
+
+SELECT
+  count(*) FILTER (WHERE is_default_text) AS default_text_count,
+  count(*) FILTER (WHERE is_default_vision) AS default_vision_count,
+  count(*) FILTER (WHERE is_default_image) AS default_image_count
+FROM provider_models;
+```
+
+前两个结果应为 `0`，后三个结果都不得大于 `1`。正式迁移器可以重复运行；不要手工重复执行单个迁移 SQL 文件。
+
 ## 备份与恢复
 
 - 每日执行 `pg_dump -Fc promptix > promptix-YYYYMMDD.dump`，至少保留 14 天并异地存储。
@@ -35,9 +76,17 @@
 
 - API `/api/health` 正常但业务 500：检查 `DATABASE_URL` 与迁移是否执行。
 - 新任务返回 `QUEUE_UNAVAILABLE`：检查 Redis、`REDIS_URL` 和防火墙。
+- 使用带数据库编号的 Redis URL（例如 `redis://host:6379/2`）时，API 与 Worker 必须配置完全相同的 URL。
 - 任务长期 queued：Worker 未运行或队列名不一致；查看 Worker 的 JSON 日志 `worker_ready`。
-- 任务 failed：后台任务中心查看 `errorMessage`，确认 Provider Base URL、模型名及密钥环境变量；修复后点击重试。
+- `DEFAULT_MODEL_NOT_CONFIGURED`：为任务类型配置已启用且能力匹配的默认 Model，并确认其 Provider 已启用。
+- `MODEL_CAPABILITY_MISMATCH`：检查 Model 能力声明与 Adapter 是否真的支持该任务，不要只修改默认标记绕过能力校验。
+- 任务 failed：后台任务中心查看 `errorMessage`，确认 Provider Base URL、Model ID 及密钥环境变量；修复后点击重试。重试会先移除 BullMQ 中保留的终态 Job，再安全复用原 Job ID。
+- 65535 返回 `INVALID_API_KEY`：确认 `IMAGE_65535_API_KEY` 是当前有效密钥；Bearer 与 `X-API-Key` 认证方式应与账号文档一致。不要把密钥粘贴进 Provider 数据库字段。
 - 图片无法显示：确认 OSS 公读/CDN URL，或本地模式下 `/uploads` 已反代到 API。
+
+## 应用回滚
+
+发布后如需快速回滚，先停止新 API/Worker，再部署旧版本代码。由于迁移保留了旧 Provider 字段和 `generation_jobs.provider_id`，旧代码可继续读取兼容数据；不要为了应用回滚删除 `provider_models` 或 `model_id`。只有灾难恢复时才创建空库并用升级前的 `pg_dump` 通过 `pg_restore` 恢复。
 
 ## 安全基线
 
