@@ -91,6 +91,6 @@ npm run build
 
 ## 环境要求
 
-- Node.js `>=20.19`；若使用 Node 22，请使用 `>=22.12`（Vite 8 要求）。
+- Node.js 22（`.nvmrc` 固定为 `22`，项目 engine 要求 `>=22.0.0`）。
 - Docker Desktop 或兼容 Docker Engine（用于 PostgreSQL/Redis）。
 - 生产环境必须设置强 `JWT_SECRET`、`COOKIE_SECURE=true`，并使用 HTTPS。

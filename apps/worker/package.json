@@ -10,7 +10,13 @@
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "4.0.15",
+    "@ai-sdk/deepseek": "3.0.11",
+    "@ai-sdk/google": "4.0.17",
+    "@ai-sdk/openai": "4.0.15",
+    "@ai-sdk/openai-compatible": "3.0.11",
     "@promptix/shared": "*",
+    "ai": "7.0.29",
     "bullmq": "^5.80.5",
     "drizzle-orm": "^0.44.7",
     "postgres": "^3.4.9",
