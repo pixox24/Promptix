@@ -8,6 +8,7 @@ import { ossAdminRoutes } from './routes/oss-admin.js';
 import { adminTemplateRoutes, publicTemplateRoutes } from './routes/templates.js';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { providerRoutes } from './routes/providers.js';
+import { modelRoutes } from './routes/models.js';
 import { jobRoutes } from './routes/jobs.js';
 import { mkdirSync } from 'node:fs';
 import { localStorageRoot } from './lib/storage.js';
@@ -53,6 +54,7 @@ app.route('/api/admin/oss', ossAdminRoutes);
 app.route('/api/admin/templates', adminTemplateRoutes);
 app.route('/api/templates', publicTemplateRoutes);
 app.route('/api/admin/providers', providerRoutes);
+app.route('/api/admin/models', modelRoutes);
 app.route('/api/admin/jobs', jobRoutes);
 try { mkdirSync(localStorageRoot(), { recursive: true }); } catch { /* health remains available with incomplete env */ }
 app.use('/uploads/*', serveStatic({ root: path.dirname(localStorageRoot()) }));

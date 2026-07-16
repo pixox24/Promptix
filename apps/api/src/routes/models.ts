@@ -1,0 +1,168 @@
+import { Hono } from 'hono';
+import { and, count, desc, eq, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import {
+  modelCapabilitySchema,
+  modelDefaultsSchema,
+  providerModelInputSchema,
+} from '@promptix/shared';
+import { getDb } from '../db/client.js';
+import { generationJobs, providerModels, providers } from '../db/schema.js';
+import { requireAdmin, type AdminVars } from '../lib/auth.js';
+import { fail, ok } from '../lib/response.js';
+
+const modelPatchSchema = z.object({
+  providerId: z.string().uuid().optional(),
+  name: z.string().trim().min(1).max(120).optional(),
+  modelId: z.string().trim().min(1).max(200).optional(),
+  capabilities: z.array(modelCapabilitySchema).min(1).optional(),
+  defaults: modelDefaultsSchema.optional(),
+  enabled: z.boolean().optional(),
+  isDefaultText: z.boolean().optional(),
+  isDefaultVision: z.boolean().optional(),
+  isDefaultImage: z.boolean().optional(),
+});
+
+async function providerExists(providerId: string) {
+  const [provider] = await getDb().select({ id: providers.id })
+    .from(providers)
+    .where(eq(providers.id, providerId))
+    .limit(1);
+  return Boolean(provider);
+}
+
+export const modelRoutes = new Hono<AdminVars>();
+modelRoutes.use('*', requireAdmin);
+
+modelRoutes.get('/', async (c) => {
+  const providerId = c.req.query('providerId');
+  const capability = c.req.query('capability');
+  if (capability && !modelCapabilitySchema.safeParse(capability).success) {
+    return fail(c, 'VALIDATION_ERROR', 'Invalid model capability', 400);
+  }
+  const filters = [
+    ...(providerId ? [eq(providerModels.providerId, providerId)] : []),
+    ...(capability
+      ? [sql`${providerModels.capabilities} @> ARRAY[${capability}]::text[]`]
+      : []),
+  ];
+  const rows = await getDb().select({
+    model: providerModels,
+    providerName: providers.name,
+    providerEnabled: providers.enabled,
+    adapterType: providers.adapterType,
+    apiKeyEnv: providers.apiKeyEnv,
+  }).from(providerModels)
+    .innerJoin(providers, eq(providerModels.providerId, providers.id))
+    .where(filters.length ? and(...filters) : undefined)
+    .orderBy(desc(providerModels.updatedAt));
+  return ok(c, rows.map((row) => ({
+    ...row.model,
+    providerName: row.providerName,
+    providerEnabled: row.providerEnabled,
+    adapterType: row.adapterType,
+    apiKeyConfigured: Boolean(row.apiKeyEnv && process.env[row.apiKeyEnv]),
+  })));
+});
+
+modelRoutes.post('/', async (c) => {
+  const parsed = providerModelInputSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid model', 400);
+  }
+  if (!(await providerExists(parsed.data.providerId))) {
+    return fail(c, 'PROVIDER_NOT_FOUND', 'Provider not found', 404);
+  }
+  try {
+    const row = await getDb().transaction(async (tx) => {
+      if (parsed.data.isDefaultText) {
+        await tx.update(providerModels).set({ isDefaultText: false })
+          .where(eq(providerModels.isDefaultText, true));
+      }
+      if (parsed.data.isDefaultVision) {
+        await tx.update(providerModels).set({ isDefaultVision: false })
+          .where(eq(providerModels.isDefaultVision, true));
+      }
+      if (parsed.data.isDefaultImage) {
+        await tx.update(providerModels).set({ isDefaultImage: false })
+          .where(eq(providerModels.isDefaultImage, true));
+      }
+      const [created] = await tx.insert(providerModels).values(parsed.data).returning();
+      return created;
+    });
+    return ok(c, row, 201);
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
+      return fail(c, 'MODEL_ALREADY_EXISTS', 'This provider already contains the model ID', 409);
+    }
+    throw error;
+  }
+});
+
+modelRoutes.patch('/:id', async (c) => {
+  const patch = modelPatchSchema.safeParse(await c.req.json().catch(() => null));
+  if (!patch.success) {
+    return fail(c, 'VALIDATION_ERROR', patch.error.issues[0]?.message ?? 'Invalid model', 400);
+  }
+  const [existing] = await getDb().select().from(providerModels)
+    .where(eq(providerModels.id, c.req.param('id')))
+    .limit(1);
+  if (!existing) return fail(c, 'NOT_FOUND', 'Model not found', 404);
+
+  const merged = providerModelInputSchema.safeParse({ ...existing, ...patch.data });
+  if (!merged.success) {
+    return fail(c, 'VALIDATION_ERROR', merged.error.issues[0]?.message ?? 'Invalid model', 400);
+  }
+  if (!merged.data.enabled &&
+      (merged.data.isDefaultText || merged.data.isDefaultVision || merged.data.isDefaultImage)) {
+    return fail(c, 'DEFAULT_MODEL_DISABLE_FORBIDDEN', 'Reassign default roles before disabling this model', 409);
+  }
+  if (!(await providerExists(merged.data.providerId))) {
+    return fail(c, 'PROVIDER_NOT_FOUND', 'Provider not found', 404);
+  }
+
+  try {
+    const row = await getDb().transaction(async (tx) => {
+      if (merged.data.isDefaultText) {
+        await tx.update(providerModels).set({ isDefaultText: false })
+          .where(eq(providerModels.isDefaultText, true));
+      }
+      if (merged.data.isDefaultVision) {
+        await tx.update(providerModels).set({ isDefaultVision: false })
+          .where(eq(providerModels.isDefaultVision, true));
+      }
+      if (merged.data.isDefaultImage) {
+        await tx.update(providerModels).set({ isDefaultImage: false })
+          .where(eq(providerModels.isDefaultImage, true));
+      }
+      const [updated] = await tx.update(providerModels).set({
+        ...merged.data,
+        updatedAt: new Date(),
+      }).where(eq(providerModels.id, existing.id)).returning();
+      return updated;
+    });
+    return ok(c, row);
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
+      return fail(c, 'MODEL_ALREADY_EXISTS', 'This provider already contains the model ID', 409);
+    }
+    throw error;
+  }
+});
+
+modelRoutes.delete('/:id', async (c) => {
+  const [existing] = await getDb().select().from(providerModels)
+    .where(eq(providerModels.id, c.req.param('id')))
+    .limit(1);
+  if (!existing) return fail(c, 'NOT_FOUND', 'Model not found', 404);
+  if (existing.isDefaultText || existing.isDefaultVision || existing.isDefaultImage) {
+    return fail(c, 'DEFAULT_MODEL_DELETE_FORBIDDEN', 'Reassign default roles before deleting this model', 409);
+  }
+  const [{ value }] = await getDb().select({ value: count() }).from(generationJobs)
+    .where(eq(generationJobs.modelId, existing.id));
+  if (value > 0) {
+    return fail(c, 'MODEL_IN_USE', 'Model is referenced by generation jobs; disable it instead', 409);
+  }
+  await getDb().delete(providerModels).where(eq(providerModels.id, existing.id));
+  return ok(c, { ok: true });
+});
