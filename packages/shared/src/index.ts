@@ -94,6 +94,84 @@ export const providerProtocolSchema = z.enum([
 ]);
 export type ProviderProtocol = z.infer<typeof providerProtocolSchema>;
 
+export const providerAdapterSchema = z.enum([
+  'openai_compatible',
+  'openai',
+  'anthropic',
+  'google',
+  'deepseek',
+  'custom_65535_async',
+]);
+export type ProviderAdapter = z.infer<typeof providerAdapterSchema>;
+
+export const modelCapabilitySchema = z.enum([
+  'text',
+  'vision',
+  'image',
+  'structured_output',
+]);
+export type ModelCapability = z.infer<typeof modelCapabilitySchema>;
+
+const providerOptionsSchema = z.record(z.record(z.unknown()));
+
+export const modelDefaultsSchema = z.object({
+  temperature: z.number().min(0).max(2).optional(),
+  maxOutputTokens: z.number().int().positive().max(131072).optional(),
+  topP: z.number().min(0).max(1).optional(),
+  providerOptions: providerOptionsSchema.optional(),
+  image: z.object({
+    size: z.string().regex(/^\d+x\d+$/).optional(),
+    aspectRatio: z.string().regex(/^\d+:\d+$/).optional(),
+    n: z.number().int().min(1).max(10).optional(),
+    seed: z.number().int().nonnegative().optional(),
+  }).optional(),
+  async: z.object({
+    pollIntervalMs: z.number().int().min(250).max(10000).optional(),
+    timeoutMs: z.number().int().min(10000).max(3600000).optional(),
+    maxQueueSeconds: z.number().int().min(1).max(3600).optional(),
+    quality: z.string().min(1).optional(),
+    responseFormat: z.string().min(1).optional(),
+  }).optional(),
+}).default({});
+export type ModelDefaults = z.infer<typeof modelDefaultsSchema>;
+
+export const providerModelInputSchema = z.object({
+  providerId: z.string().uuid(),
+  name: z.string().trim().min(1).max(120),
+  modelId: z.string().trim().min(1).max(200),
+  capabilities: z.array(modelCapabilitySchema).min(1),
+  defaults: modelDefaultsSchema,
+  enabled: z.boolean().default(true),
+  isDefaultText: z.boolean().default(false),
+  isDefaultVision: z.boolean().default(false),
+  isDefaultImage: z.boolean().default(false),
+}).superRefine((value, ctx) => {
+  const capabilities = new Set(value.capabilities);
+  if (value.isDefaultText &&
+      (!capabilities.has('text') || !capabilities.has('structured_output'))) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['isDefaultText'],
+      message: 'Default text model requires text and structured_output capabilities',
+    });
+  }
+  if (value.isDefaultVision && !capabilities.has('vision')) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['isDefaultVision'],
+      message: 'Default vision model requires vision capability',
+    });
+  }
+  if (value.isDefaultImage && !capabilities.has('image')) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['isDefaultImage'],
+      message: 'Default image model requires image capability',
+    });
+  }
+});
+export type ProviderModelInput = z.infer<typeof providerModelInputSchema>;
+
 export const storageClassSchema = z.enum(['temp', 'permanent']);
 export type StorageClass = z.infer<typeof storageClassSchema>;
 
