@@ -1,9 +1,18 @@
 import { Worker, type Job } from 'bullmq';
-import { and, desc, eq, or } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
+import { jobTypeSchema } from '@promptix/shared';
 import { loadEnvFile, redisConnection } from './env.js';
 loadEnvFile();
-const { db, generationJobs, providers } = await import('./db.js');
+const { db, generationJobs } = await import('./db.js');
 const { describeImage, generateImage, structurePrompt } = await import('./adapters.js');
+const {
+  resolveDefaultVisionModel,
+  resolvePrimaryModel,
+} = await import('./model-resolver.js');
+const {
+  assertCapabilitiesForJob,
+  imageReverseNeedsVisionFallback,
+} = await import('./model-routing.js');
 
 const QUEUE_NAME='promptix-jobs';
 const worker=new Worker(QUEUE_NAME,async(job:Job<{jobId:string}>)=>{
@@ -16,22 +25,39 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<{jobId:string}>)=>{
       if((record.input as {fail?:boolean}).fail)throw new Error('Intentional noop failure');
       output={ok:true,processedAt:new Date().toISOString()};
     }else{
-      const [provider]=record.providerId
-        ?await db.select().from(providers).where(and(eq(providers.id,record.providerId),eq(providers.enabled,true))).limit(1)
-        :await db.select().from(providers).where(and(eq(providers.enabled,true),or(eq(providers.kind,record.type==='image_generate'?'image':'llm'),eq(providers.kind,'both')))).orderBy(desc(providers.isDefault)).limit(1);
-      if(!provider)throw new Error('No enabled provider configured for this job');
-      if(record.type==='image_generate'){
-        output=await generateImage(provider,record.input as Record<string,unknown>);
-      }else if(record.type==='image_reverse'&&provider.protocol==='deepseek_chat'){
-        const allProviders=await db.select().from(providers).where(eq(providers.enabled,true));
-        const visionProvider=allProviders.find(candidate=>candidate.protocol==='openai_chat'&&Boolean((candidate.defaults as {supportsVision?:boolean}|null)?.supportsVision));
-        if(!visionProvider)throw new Error('DeepSeek image reverse requires an enabled OpenAI Chat provider marked as vision-capable');
-        const imageUrl=(record.input as {imageUrl?:unknown}).imageUrl;
-        if(typeof imageUrl!=='string')throw new Error('image_reverse job is missing input.imageUrl');
-        const description=await describeImage(visionProvider,imageUrl);
-        output=await structurePrompt(provider,{text:`以下是视觉模型对参考图的详细描述。请保留视觉事实并优化为可复用模板：\n${description}`});
-      }else{
-        output=await structurePrompt(provider,record.input as Record<string,unknown>);
+      const jobType = jobTypeSchema.parse(record.type);
+      const primary = await resolvePrimaryModel(
+        jobType,
+        record.modelId,
+        record.providerId,
+      );
+      assertCapabilitiesForJob(primary.model, jobType);
+
+      if (record.modelId !== primary.model.id || record.providerId !== primary.provider.id) {
+        await db.update(generationJobs).set({
+          modelId: primary.model.id,
+          providerId: primary.provider.id,
+        }).where(eq(generationJobs.id, record.id));
+      }
+
+      if (jobType === 'image_generate') {
+        output = await generateImage(primary, record.input as Record<string, unknown>);
+      } else if (jobType === 'image_reverse') {
+        const imageUrl = (record.input as { imageUrl?: unknown }).imageUrl;
+        if (typeof imageUrl !== 'string') {
+          throw new Error('image_reverse job is missing input.imageUrl');
+        }
+        if (imageReverseNeedsVisionFallback(primary.model)) {
+          const vision = await resolveDefaultVisionModel();
+          const description = await describeImage(vision, imageUrl);
+          output = await structurePrompt(primary, {
+            text: `以下是视觉模型对参考图的详细描述。请保留视觉事实并优化为可复用模板：\n${description}`,
+          });
+        } else {
+          output = await structurePrompt(primary, { imageUrl });
+        }
+      } else {
+        output = await structurePrompt(primary, record.input as Record<string, unknown>);
       }
     }
     await db.update(generationJobs).set({status:'succeeded',output,finishedAt:new Date(),errorMessage:null}).where(eq(generationJobs.id,record.id));
