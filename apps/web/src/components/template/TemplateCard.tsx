@@ -42,10 +42,10 @@ export function TemplateCard({ template }: TemplateCardProps) {
       to={`/template/${template.id}`}
       className="group block h-full w-full"
     >
-      <div className="group relative flex h-full cursor-zoom-in flex-col overflow-hidden rounded-[6px] border border-gray-100 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+      <div className="group relative flex h-full cursor-zoom-in flex-col overflow-hidden rounded-[8px] border border-gray-100 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
         {/* Image 3:4 */}
-        <div className="relative aspect-[3/4] w-full overflow-hidden bg-gray-50">
-          <div className="relative h-full w-full">
+        <div className="relative aspect-[3/4] w-full bg-white p-1">
+          <div className="relative h-full w-full overflow-hidden rounded-[4px] bg-gray-50">
             <img
               src={template.coverImage}
               alt={template.name}
