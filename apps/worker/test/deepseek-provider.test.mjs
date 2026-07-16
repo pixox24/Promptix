@@ -1,50 +1,107 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeImage, structurePrompt } from '../dist/adapters.js';
+import { describeImage, structurePrompt } from '../dist/ai-adapters.js';
 
 const draft = {
-  name: '优化模板', summary: '优化后的提示词', description: '结构化描述', category: 'illustration',
-  tags: ['插画'], scenarios: ['创作'], variables: [{ id: 'var-1', key: 'subject', label: '主体', type: 'text' }],
+  name: '优化模板',
+  summary: '优化后的提示词',
+  description: '结构化描述',
+  category: 'illustration',
+  tags: ['插画'],
+  scenarios: ['创作'],
+  variables: [{ key: 'subject', label: '主体', type: 'text' }],
   promptTemplate: '为 {{subject}} 创作一张精致插画',
 };
 
-test('DeepSeek provider sends text-only JSON mode requests and strips capability metadata', async () => {
+const provider = {
+  id: '00000000-0000-4000-8000-000000000001',
+  name: 'DeepSeek',
+  adapterType: 'deepseek',
+  baseUrl: 'https://api.deepseek.com',
+  apiKeyEnv: 'TEST_DEEPSEEK_API_KEY',
+  authStyle: 'bearer',
+  enabled: true,
+  protocol: 'deepseek_chat',
+  kind: 'llm',
+  defaultModel: 'deepseek-v4-pro',
+  defaults: {},
+  isDefault: true,
+};
+
+const model = {
+  id: '00000000-0000-4000-8000-000000000002',
+  providerId: provider.id,
+  name: 'DeepSeek V4 Pro',
+  modelId: 'deepseek-v4-pro',
+  capabilities: ['text', 'structured_output'],
+  defaults: {
+    maxOutputTokens: 4096,
+    providerOptions: { deepseek: { thinking: { type: 'disabled' } } },
+  },
+  enabled: true,
+  isDefaultText: true,
+  isDefaultVision: false,
+  isDefaultImage: false,
+};
+
+test('AI SDK produces and normalizes a TemplateDraft', async () => {
   process.env.TEST_DEEPSEEK_API_KEY = 'test-key';
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
     assert.equal(url, 'https://api.deepseek.com/chat/completions');
     const body = JSON.parse(init.body);
-    assert.equal(body.model, 'deepseek-v4-flash');
-    assert.equal(typeof body.messages[1].content, 'string');
-    assert.deepEqual(body.response_format, { type: 'json_object' });
-    assert.deepEqual(body.thinking, { type: 'disabled' });
-    assert.equal('supportsVision' in body, false);
-    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(draft) } }] }), { status: 200 });
+    assert.equal(body.model, 'deepseek-v4-pro');
+    assert.equal(body.thinking.type, 'disabled');
+    return new Response(JSON.stringify({
+      id: 'chat-test',
+      object: 'chat.completion',
+      created: 1,
+      model: 'deepseek-v4-pro',
+      choices: [{
+        index: 0,
+        finish_reason: 'stop',
+        message: { role: 'assistant', content: JSON.stringify(draft) },
+      }],
+      usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
   try {
-    const result = await structurePrompt({ protocol: 'deepseek_chat', baseUrl: 'https://api.deepseek.com', apiKeyEnv: 'TEST_DEEPSEEK_API_KEY', defaultModel: 'deepseek-v4-flash', defaults: { supportsVision: false, thinking: { type: 'disabled' }, max_tokens: 4096 }, authStyle: 'bearer' }, { text: '把猫咪插画提示词优化一下' });
+    const result = await structurePrompt({ provider, model }, { text: '优化猫咪插画' });
     assert.equal(result.name, '优化模板');
-  } finally { globalThis.fetch = originalFetch; }
+    assert.equal(result.variables[0].id, 'var-1');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
-test('DeepSeek provider rejects direct image input with an actionable error', async () => {
-  await assert.rejects(
-    () => structurePrompt({ protocol: 'deepseek_chat', baseUrl: 'https://api.deepseek.com', apiKeyEnv: null, defaultModel: 'deepseek-v4-flash', defaults: {}, authStyle: 'bearer' }, { imageUrl: 'data:image/png;base64,AA==' }),
-    /does not accept image input/,
-  );
-});
-
-test('vision provider produces a description for the DeepSeek second stage', async () => {
-  process.env.TEST_VISION_API_KEY = 'test-key';
+test('vision model sends an AI SDK image content part', async () => {
+  process.env.TEST_DEEPSEEK_API_KEY = 'test-key';
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, init) => {
     const body = JSON.parse(init.body);
-    assert.equal(Array.isArray(body.messages[1].content), true);
-    assert.equal(body.messages[1].content[1].type, 'image_url');
-    return new Response(JSON.stringify({ choices: [{ message: { content: '蓝色背景中的白猫，柔和侧光，居中构图。' } }] }), { status: 200 });
+    const content = body.messages[1].content;
+    assert.equal(Array.isArray(content), true);
+    assert.equal(content.some((part) => part.type === 'image_url'), true);
+    return new Response(JSON.stringify({
+      id: 'chat-vision',
+      object: 'chat.completion',
+      created: 1,
+      model: 'vision-model',
+      choices: [{
+        index: 0,
+        finish_reason: 'stop',
+        message: { role: 'assistant', content: '蓝色背景中的白猫，柔和侧光。' },
+      }],
+      usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
   try {
-    const result = await describeImage({ protocol: 'openai_chat', baseUrl: 'https://vision.example/v1', apiKeyEnv: 'TEST_VISION_API_KEY', defaultModel: 'vision-model', defaults: { supportsVision: true }, authStyle: 'bearer' }, 'data:image/png;base64,AA==');
+    const result = await describeImage({
+      provider: { ...provider, adapterType: 'openai_compatible' },
+      model: { ...model, modelId: 'vision-model', capabilities: ['text', 'vision'] },
+    }, 'data:image/png;base64,AA==');
     assert.match(result, /白猫/);
-  } finally { globalThis.fetch = originalFetch; }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
