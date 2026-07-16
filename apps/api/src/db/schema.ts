@@ -9,6 +9,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 export const adminUsers = pgTable(
   'admin_users',
@@ -94,6 +95,7 @@ export const providers = pgTable('providers', {
   baseUrl: text('base_url').notNull(),
   apiKeyEncrypted: text('api_key_encrypted'),
   apiKeyEnv: text('api_key_env'),
+  adapterType: text('adapter_type').notNull().default('openai_compatible'),
   defaultModel: text('default_model').notNull().default(''),
   defaults: jsonb('defaults').notNull().default({}),
   authStyle: text('auth_style').notNull().default('bearer'),
@@ -107,6 +109,46 @@ export const providers = pgTable('providers', {
     .defaultNow(),
 });
 
+export const providerModels = pgTable(
+  'provider_models',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    providerId: uuid('provider_id')
+      .notNull()
+      .references(() => providers.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    modelId: text('model_id').notNull(),
+    capabilities: text('capabilities')
+      .array()
+      .notNull()
+      .default(sql`ARRAY['text']::text[]`),
+    defaults: jsonb('defaults').notNull().default({}),
+    enabled: boolean('enabled').notNull().default(true),
+    isDefaultText: boolean('is_default_text').notNull().default(false),
+    isDefaultVision: boolean('is_default_vision').notNull().default(false),
+    isDefaultImage: boolean('is_default_image').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('provider_models_provider_model_uidx').on(t.providerId, t.modelId),
+    index('provider_models_provider_enabled_idx').on(t.providerId, t.enabled),
+    uniqueIndex('provider_models_default_text_uidx')
+      .on(t.isDefaultText)
+      .where(sql`${t.isDefaultText} = true`),
+    uniqueIndex('provider_models_default_vision_uidx')
+      .on(t.isDefaultVision)
+      .where(sql`${t.isDefaultVision} = true`),
+    uniqueIndex('provider_models_default_image_uidx')
+      .on(t.isDefaultImage)
+      .where(sql`${t.isDefaultImage} = true`),
+  ],
+);
+
 export const generationJobs = pgTable(
   'generation_jobs',
   {
@@ -116,6 +158,7 @@ export const generationJobs = pgTable(
     actorType: text('actor_type').notNull().default('admin'),
     actorId: uuid('actor_id'),
     providerId: uuid('provider_id').references(() => providers.id),
+    modelId: uuid('model_id').references(() => providerModels.id),
     queueName: text('queue_name'),
     bullJobId: text('bull_job_id'),
     attempts: integer('attempts').notNull().default(0),

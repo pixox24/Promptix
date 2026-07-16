@@ -15,6 +15,13 @@
       "when": 1784189755345,
       "tag": "0001_shiny_emma_frost",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784212587989,
+      "tag": "0002_ai_sdk_model_registry",
+      "breakpoints": true
     }
   ]
 }
