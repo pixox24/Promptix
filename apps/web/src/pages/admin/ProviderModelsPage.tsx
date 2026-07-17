@@ -5,7 +5,13 @@ import type {
   ModelCapability,
   ProviderAdapter,
   ProviderConnection,
+  ProviderTextTestJob,
 } from '../../types/adminModels';
+import {
+  eligibleProviderTextModels,
+  initialProviderTextTestModelId,
+  isProviderTextTestPending,
+} from '../../lib/provider-text-test-ui';
 
 const field = 'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100';
 const button = 'rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50';
@@ -60,6 +66,12 @@ export function ProviderModelsPage() {
   const [modelForm, setModelForm] = useState<ModelForm>(blankModel);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [testProvider, setTestProvider] = useState<ProviderConnection | null>(null);
+  const [selectedTestModelId, setSelectedTestModelId] = useState('');
+  const [providerTestJob, setProviderTestJob] = useState<ProviderTextTestJob | null>(null);
+  const [providerTestSubmitting, setProviderTestSubmitting] = useState(false);
+  const testModels = testProvider ? eligibleProviderTextModels(testProvider, models) : [];
+  const selectedTestModel = testModels.find((model) => model.id === selectedTestModelId);
 
   const load = useCallback(async () => {
     const [providerRows, modelRows] = await Promise.all([
@@ -76,6 +88,80 @@ export function ProviderModelsPage() {
   useEffect(() => {
     load().catch((error) => setMessage(error instanceof Error ? error.message : '配置加载失败'));
   }, [load]);
+
+  useEffect(() => {
+    if (!providerTestJob || !isProviderTextTestPending(providerTestJob.status)) return;
+
+    let disposed = false;
+    const refresh = async () => {
+      try {
+        const nextJob = await api<ProviderTextTestJob>(`/api/admin/jobs/${providerTestJob.id}`);
+        if (!disposed) setProviderTestJob(nextJob);
+      } catch {
+        if (!disposed) {
+          setProviderTestJob((current) => current && {
+            ...current,
+            status: 'failed',
+            errorMessage: 'Unable to retrieve test status. See Task Center for details.',
+          });
+        }
+      }
+    };
+
+    void refresh();
+    const intervalId = window.setInterval(() => void refresh(), 1500);
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, [providerTestJob?.id, providerTestJob?.status]);
+
+  function openProviderTest(provider: ProviderConnection) {
+    const eligibleModels = eligibleProviderTextModels(provider, models);
+    if (eligibleModels.length === 0) {
+      setMessage('Add an enabled text model before testing this provider');
+      return;
+    }
+    setTestProvider(provider);
+    setSelectedTestModelId(initialProviderTextTestModelId(eligibleModels));
+    setProviderTestJob(null);
+    setProviderTestSubmitting(false);
+  }
+
+  function closeProviderTest() {
+    if (providerTestSubmitting || (providerTestJob && isProviderTextTestPending(providerTestJob.status))) return;
+    setTestProvider(null);
+    setSelectedTestModelId('');
+    setProviderTestJob(null);
+  }
+
+  async function submitProviderTest() {
+    if (!testProvider || !selectedTestModelId || providerTestSubmitting
+      || (providerTestJob && isProviderTextTestPending(providerTestJob.status))) return;
+
+    setProviderTestSubmitting(true);
+    setProviderTestJob(null);
+    try {
+      const created = await api<{ jobId: string; status: 'queued' }>(
+        `/api/admin/providers/${testProvider.id}/test`,
+        { method: 'POST', body: JSON.stringify({ modelId: selectedTestModelId }) },
+      );
+      setProviderTestJob({
+        id: created.jobId,
+        status: created.status,
+        modelId: selectedTestModelId,
+      });
+    } catch (error) {
+      setProviderTestJob({
+        id: '',
+        status: 'failed',
+        modelId: selectedTestModelId,
+        errorMessage: error instanceof Error ? error.message : 'Unable to start the connection test.',
+      });
+    } finally {
+      setProviderTestSubmitting(false);
+    }
+  }
 
   function toggleCapability(capability: ModelCapability) {
     setModelForm((current) => ({
@@ -278,6 +364,15 @@ export function ProviderModelsPage() {
     <section className="mt-6 space-y-4">
       {providers.map((provider) => <div key={provider.id} className="rounded-xl border bg-white p-5">
         <div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-semibold">{provider.name}</h2><p className="mt-1 text-xs text-gray-500">{provider.adapterType} · {provider.baseUrl}</p></div><span className={`rounded-full px-2 py-1 text-xs ${provider.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>{provider.enabled ? 'enabled' : 'disabled'} · key {provider.apiKeyConfigured ? '✓' : '未配置'}</span></div>
+        <div className="mt-3">
+          <button
+            type="button"
+            className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-700 hover:bg-violet-100"
+            onClick={() => openProviderTest(provider)}
+          >
+            Test connection
+          </button>
+        </div>
         <div className="mt-4 grid gap-3 lg:grid-cols-2">{models.filter((m) => m.providerId === provider.id).map((model) => <div key={model.id} className="rounded-lg border bg-gray-50 p-4">
           <div className="flex items-start justify-between gap-3"><div><b className="text-sm">{model.name}</b><p className="mt-1 font-mono text-xs text-gray-500">{model.modelId}</p></div><div className="flex gap-2"><button className="text-xs text-violet-600" onClick={() => setModelEnabled(model, !model.enabled)}>{model.enabled ? '停用' : '启用'}</button><button className="text-xs text-red-600" onClick={() => removeModel(model)}>删除</button></div></div>
           <p className="mt-3 text-xs text-gray-500">{model.capabilities.join(' · ')}</p>
@@ -286,5 +381,88 @@ export function ProviderModelsPage() {
         </div>)}</div>
       </div>)}
     </section>
+
+    {testProvider && <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/40 p-4">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="provider-text-test-title"
+        className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 id="provider-text-test-title" className="text-lg font-semibold">Test connection</h2>
+            <p className="mt-1 text-sm text-gray-600">{testProvider.name}</p>
+          </div>
+          <button
+            type="button"
+            className="text-sm text-gray-500 hover:text-gray-800 disabled:opacity-50"
+            onClick={closeProviderTest}
+            disabled={providerTestSubmitting || Boolean(providerTestJob && isProviderTextTestPending(providerTestJob.status))}
+          >
+            Close
+          </button>
+        </div>
+
+        <p className="mt-4 rounded-lg bg-violet-50 px-3 py-2 text-sm text-violet-800">
+          This sends one fixed, low-cost text request: Reply with OK only (temperature 0, 16 tokens max).
+        </p>
+
+        <label className="mt-4 block text-sm font-medium text-gray-700">
+          Text model
+          <select
+            className={`${field} mt-1`}
+            value={selectedTestModelId}
+            onChange={(event) => setSelectedTestModelId(event.target.value)}
+            disabled={providerTestSubmitting || Boolean(providerTestJob && isProviderTextTestPending(providerTestJob.status))}
+          >
+            {testModels.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+          </select>
+        </label>
+
+        {providerTestSubmitting && <p className="mt-4 text-sm text-gray-600">Creating connection test…</p>}
+        {providerTestJob && <div className="mt-4 rounded-lg border border-gray-200 p-3 text-sm">
+          {isProviderTextTestPending(providerTestJob.status) && <p className="text-gray-700">
+            Connection test {providerTestJob.status}…
+          </p>}
+          {providerTestJob.status === 'succeeded' && <div className="space-y-1 text-emerald-700">
+            <p>Connection and text call succeeded.</p>
+            <p>Model: {selectedTestModel?.name ?? 'Selected text model'}</p>
+            <p>Latency: {typeof providerTestJob.output?.latencyMs === 'number'
+              ? `${providerTestJob.output.latencyMs} ms`
+              : 'not reported'}</p>
+          </div>}
+          {providerTestJob.status === 'failed' && <div className="space-y-2 text-red-700">
+            <p>{providerTestJob.errorMessage ?? 'Connection test failed.'}</p>
+            <a className="font-medium text-violet-700 underline" href="/admin/jobs">Open Task Center</a>
+          </div>}
+          {providerTestJob.status === 'cancelled' && <div className="space-y-2 text-gray-700">
+            <p>Connection test was cancelled.</p>
+            <a className="font-medium text-violet-700 underline" href="/admin/jobs">Open Task Center</a>
+          </div>}
+        </div>}
+
+        <div className="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            onClick={closeProviderTest}
+            disabled={providerTestSubmitting || Boolean(providerTestJob && isProviderTextTestPending(providerTestJob.status))}
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            className={button}
+            onClick={submitProviderTest}
+            disabled={!selectedTestModelId || providerTestSubmitting || Boolean(providerTestJob && isProviderTextTestPending(providerTestJob.status))}
+          >
+            {providerTestSubmitting || (providerTestJob && isProviderTextTestPending(providerTestJob.status))
+              ? 'Testing…'
+              : 'Test connection'}
+          </button>
+        </div>
+      </div>
+    </div>}
   </>;
 }

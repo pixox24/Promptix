@@ -39,3 +39,19 @@ export type AdminModel = {
   isDefaultVision: boolean;
   isDefaultImage: boolean;
 };
+
+export type ProviderTextTestResult = {
+  ok: true;
+  providerId: string;
+  modelId: string;
+  latencyMs: number;
+  checkedAt: string;
+};
+
+export type ProviderTextTestJob = {
+  id: string;
+  status: 'pending' | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  modelId: string | null;
+  output?: ProviderTextTestResult | null;
+  errorMessage?: string | null;
+};
