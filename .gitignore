@@ -33,4 +33,5 @@ output
 .playwright-cli
 .grok
 .worktrees
+.superpowers
 
