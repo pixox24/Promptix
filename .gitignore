@@ -32,4 +32,5 @@ apps/*/.tmp
 output
 .playwright-cli
 .grok
+.worktrees
 
