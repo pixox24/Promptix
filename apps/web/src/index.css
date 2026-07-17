@@ -64,6 +64,55 @@
   animation: toast-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* Prompt detail workspace */
+.detail-workspace {
+  isolation: isolate;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.9),
+    0 1px 2px rgb(15 23 42 / 0.04),
+    0 24px 70px rgb(15 23 42 / 0.12);
+}
+
+.detail-media-scrim {
+  background: rgb(8 12 10 / 0.76);
+  border-top: 1px solid rgb(255 255 255 / 0.14);
+}
+
+.detail-control-panel {
+  box-shadow: inset 1px 0 0 rgb(15 23 42 / 0.06);
+}
+
+.detail-panel-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(148 163 184 / 0.35) transparent;
+  scrollbar-gutter: stable;
+}
+
+.detail-panel-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.detail-panel-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.detail-panel-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgb(148 163 184 / 0.38);
+  background-clip: padding-box;
+}
+
+.detail-choice-chip {
+  min-height: 36px;
+}
+
+@supports not ((backdrop-filter: blur(1px))) {
+  .detail-media-scrim {
+    background: rgb(8 12 10 / 0.9);
+  }
+}
+
 /* —— Sidebar glassmorphism —— */
 .sidebar-glass {
   isolation: isolate;

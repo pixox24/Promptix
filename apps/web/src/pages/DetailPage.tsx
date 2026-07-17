@@ -139,115 +139,162 @@ export function DetailPage() {
   };
 
   return (
-    <div className="mx-auto max-w-[1920px] px-4 py-6 md:px-8 md:py-8">
+    <div className="mx-auto max-w-[1600px] px-4 pb-12 pt-4 md:px-8 md:pb-16">
       {/* Breadcrumb */}
-      <nav className="mb-6 text-sm text-gray-400">
-        <Link to="/" className="hover:text-gray-700">
+      <nav className="mb-4 flex items-center text-xs font-medium text-slate-400">
+        <Link to="/" className="transition-colors hover:text-slate-700">
           发现
         </Link>
-        <span className="mx-2">/</span>
-        <span className="text-gray-600">{template.name}</span>
+        <span className="mx-2 text-slate-300">/</span>
+        <span className="max-w-[60vw] truncate text-slate-600">
+          {template.name}
+        </span>
       </nav>
 
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] lg:gap-10">
-        {/* Left: cover & meta */}
-        <div className="space-y-5">
-          <div className="relative overflow-hidden rounded-[6px] border border-gray-100 bg-gray-50 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-            <img
-              src={template.coverImage}
-              alt={template.name}
-              className="aspect-[3/4] w-full object-cover object-center"
-            />
+      <div
+        data-testid="prompt-detail-workspace"
+        className="detail-workspace grid overflow-hidden rounded-[24px] border border-white/80 bg-white shadow-[0_24px_70px_rgba(15,23,42,0.12)] xl:h-[calc(100dvh-8.5rem)] xl:min-h-[640px] xl:max-h-[820px] xl:grid-cols-[minmax(0,1.35fr)_minmax(420px,0.95fr)]"
+      >
+        {/* Left: media & metadata */}
+        <section
+          data-testid="prompt-detail-media"
+          className="relative min-h-[560px] overflow-hidden bg-slate-950 xl:min-h-0"
+        >
+          <img
+            src={template.coverImage}
+            alt={template.name}
+            className="absolute inset-0 h-full w-full object-cover object-center transition-transform duration-700 hover:scale-[1.015]"
+          />
+
+          <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between p-5 sm:p-6">
+            <div className="inline-flex items-center gap-2 rounded-full border border-white/25 bg-slate-950/70 px-3 py-1.5 text-xs font-semibold text-white shadow-sm">
+              <span className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_0_4px_rgba(154,218,32,0.18)]" />
+              {categoryLabelMap[template.category]}
+            </div>
+            <button
+              type="button"
+              onClick={handleFavorite}
+              className={`inline-flex h-10 items-center gap-2 rounded-full border px-3.5 text-sm font-semibold shadow-sm transition-all focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary/45 ${
+                fav
+                  ? 'border-rose-200/70 bg-rose-50/95 text-rose-600'
+                  : 'border-white/25 bg-slate-950/70 text-white hover:bg-slate-950/85'
+              }`}
+            >
+              <IconHeart size={16} filled={fav} />
+              {fav ? '已收藏' : '收藏'}
+            </button>
           </div>
 
-          <div className="rounded-[6px] border border-gray-100 bg-white p-5 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
-            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-              {template.name}
-            </h1>
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              {template.description}
-            </p>
-
-            <div className="mt-4 flex flex-wrap gap-1.5">
-              <Tag>{categoryLabelMap[template.category]}</Tag>
-              {template.tags.map((t) => (
-                <Tag key={t}>{t}</Tag>
-              ))}
-            </div>
-
-            <div className="mt-5 border-t border-gray-50 pt-4">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-                适用场景
-              </h3>
-              <ul className="mt-2 space-y-1.5">
-                {template.scenarios.map((s) => (
-                  <li
-                    key={s}
-                    className="flex items-center gap-2 text-sm text-gray-600"
-                  >
-                    <span className="h-1 w-1 rounded-full bg-gray-300" />
-                    {s}
-                  </li>
+          <div className="detail-media-scrim absolute inset-x-0 bottom-0 z-10 p-6 text-white sm:p-8">
+            <div className="max-w-3xl">
+              <div className="mb-3 flex flex-wrap gap-1.5">
+                {template.tags.slice(0, 5).map((tag) => (
+                  <Tag key={tag}>{tag}</Tag>
                 ))}
-              </ul>
-            </div>
+              </div>
+              <h1 className="text-3xl font-semibold tracking-[-0.035em] sm:text-4xl xl:text-[2.65rem] xl:leading-[1.05]">
+                {template.name}
+              </h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-white/76 sm:text-[15px]">
+                {template.description}
+              </p>
 
-            <div className="mt-4 flex gap-4 text-xs text-gray-400">
-              <span>{template.variables.length} 个变量</span>
-              <span>{template.useCount.toLocaleString()} 次使用</span>
-              <span>{template.favoriteCount.toLocaleString()} 收藏</span>
+              <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-3 border-t border-white/15 pt-4">
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/45">
+                    适用场景
+                  </div>
+                  <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-xs text-white/80">
+                    {template.scenarios.map((scenario) => (
+                      <li key={scenario} className="flex items-center gap-1.5">
+                        <span className="h-1 w-1 rounded-full bg-primary" />
+                        {scenario}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="ml-auto flex items-center gap-4 text-xs text-white/58">
+                  <span>
+                    <strong className="mr-1 text-sm font-semibold text-white">
+                      {template.variables.length}
+                    </strong>
+                    变量
+                  </span>
+                  <span>
+                    <strong className="mr-1 text-sm font-semibold text-white">
+                      {template.useCount.toLocaleString()}
+                    </strong>
+                    使用
+                  </span>
+                  <span>
+                    <strong className="mr-1 text-sm font-semibold text-white">
+                      {template.favoriteCount.toLocaleString()}
+                    </strong>
+                    收藏
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
+        </section>
 
-        {/* Right: form & actions */}
-        <div className="space-y-5">
-          <div className="rounded-[6px] border border-gray-100 bg-white p-5 shadow-[0_2px_8px_rgba(0,0,0,0.04)] sm:p-6">
-            <div className="mb-5 flex items-start justify-between gap-3">
+        {/* Right: variables & actions */}
+        <section
+          data-testid="prompt-detail-panel"
+          className="detail-control-panel flex min-h-0 flex-col bg-[#fbfbf8]"
+        >
+          <header className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200/70 px-5 py-4 sm:px-6 sm:py-5">
+            <div className="flex items-start gap-3">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-950 text-xs font-semibold text-white shadow-sm">
+                01
+              </span>
               <div>
-                <h2 className="text-lg font-semibold text-foreground">
+                <h2 className="text-lg font-semibold tracking-tight text-slate-950">
                   填写变量
                 </h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  修改下方字段，Prompt 将自动更新
+                <p className="mt-0.5 text-xs leading-5 text-slate-500">
+                  调整参数，Prompt 会同步更新
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={handleFavorite}
-                className={`inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-sm font-medium transition-colors ${
-                  fav
-                    ? 'border-rose-200 bg-rose-50 text-rose-600'
-                    : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                <IconHeart size={16} filled={fav} />
-                {fav ? '已收藏' : '收藏'}
-              </button>
             </div>
+            <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 shadow-sm">
+              Live
+            </span>
+          </header>
 
+          <div
+            data-testid="prompt-variable-scroll"
+            className="detail-panel-scroll min-h-0 flex-1 overflow-visible px-5 py-4 sm:px-6 xl:overflow-y-auto"
+          >
             <VariableForm
               variables={template.variables}
               values={values}
               onChange={handleChange}
               errors={errors}
+              compact
             />
           </div>
 
-          <PromptPreview
-            prompt={prompt}
-            onChange={(v) => setManualPrompt(v)}
-            onCopy={handleCopy}
-          />
+          <div className="shrink-0 border-t border-slate-200/70 px-5 py-3 sm:px-6">
+            <PromptPreview
+              prompt={prompt}
+              onChange={(v) => setManualPrompt(v)}
+              onCopy={handleCopy}
+              compact
+            />
+          </div>
 
-          <div className="sticky bottom-4 z-20 space-y-3 rounded-[6px] border border-gray-100 bg-white/95 p-4 shadow-[0_12px_32px_rgba(0,0,0,0.08)] backdrop-blur-md sm:static sm:border-0 sm:bg-transparent sm:p-0 sm:shadow-none sm:backdrop-blur-none">
-            <div className="flex flex-col gap-2 sm:flex-row">
+          <footer
+            data-testid="prompt-action-footer"
+            className="shrink-0 border-t border-slate-200/70 bg-white px-5 py-4 sm:px-6"
+          >
+            <div className="flex gap-2">
               <Button
                 size="lg"
                 fullWidth
                 onClick={handleGenerate}
                 disabled={generating}
-                className="rounded-full sm:flex-[1.4]"
+                className="h-12 rounded-xl shadow-[0_8px_20px_rgba(154,218,32,0.28)] sm:flex-[1.35]"
               >
                 <IconSpark size={18} />
                 {generating ? '准备中…' : '立即生成'}
@@ -258,33 +305,35 @@ export function DetailPage() {
                 variant="secondary"
                 fullWidth
                 onClick={handleCopy}
-                className="rounded-full sm:flex-1"
+                className="h-12 rounded-xl border-slate-200 sm:flex-1"
               >
                 <IconCopy size={16} />
                 复制提示词
               </Button>
             </div>
-            <div className="flex gap-2">
+            <div className="mt-2 flex gap-1">
               <Button
                 variant="ghost"
-                size="md"
+                size="sm"
                 fullWidth
                 onClick={handleSaveDraft}
+                className="rounded-lg"
               >
                 <IconFile size={16} />
                 保存草稿
               </Button>
               <Button
                 variant="ghost"
-                size="md"
+                size="sm"
                 fullWidth
                 onClick={() => navigate('/')}
+                className="rounded-lg"
               >
                 返回发现
               </Button>
             </div>
-          </div>
-        </div>
+          </footer>
+        </section>
       </div>
 
       {/* Similar */}

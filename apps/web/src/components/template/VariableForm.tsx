@@ -5,6 +5,7 @@ interface VariableFormProps {
   values: Record<string, string>;
   onChange: (key: string, value: string) => void;
   errors?: string[];
+  compact?: boolean;
 }
 
 export function VariableForm({
@@ -12,18 +13,19 @@ export function VariableForm({
   values,
   onChange,
   errors = [],
+  compact = false,
 }: VariableFormProps) {
   return (
-    <div className="space-y-5">
+    <div className={compact ? 'space-y-4' : 'space-y-5'}>
       {variables.map((variable) => {
         const hasError = errors.includes(variable.label);
         const value = values[variable.key] ?? '';
 
         return (
-          <div key={variable.id} className="space-y-2">
+          <div key={variable.id} className={compact ? 'space-y-1.5' : 'space-y-2'}>
             <label
               htmlFor={variable.id}
-              className="flex items-center gap-1.5 text-sm font-medium text-foreground"
+              className="flex items-center gap-1.5 text-[13px] font-semibold text-slate-800"
             >
               {variable.label}
               {variable.required && (
@@ -33,13 +35,13 @@ export function VariableForm({
               )}
             </label>
             {variable.description && (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-[11px] leading-4 text-slate-400">
                 {variable.description}
               </p>
             )}
 
             {variable.type === 'select' || variable.type === 'ratio' ? (
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-1.5">
                 {(variable.options ?? []).map((opt) => {
                   const selected = value === opt;
                   return (
@@ -47,10 +49,10 @@ export function VariableForm({
                       key={opt}
                       type="button"
                       onClick={() => onChange(variable.key, opt)}
-                      className={`rounded-md border px-3.5 py-2 text-sm transition-all ${
+                      className={`detail-choice-chip rounded-[10px] border px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-primary/30 ${
                         selected
-                          ? 'border-transparent bg-primary text-primary-foreground shadow-xs'
-                          : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                          ? 'border-primary/55 bg-primary/16 text-slate-950 shadow-[inset_0_0_0_1px_rgba(154,218,32,0.18)]'
+                          : 'border-slate-200 bg-white text-slate-600 shadow-sm hover:border-slate-300 hover:bg-slate-50'
                       }`}
                     >
                       {opt}
@@ -65,10 +67,10 @@ export function VariableForm({
                 value={value}
                 placeholder={variable.placeholder}
                 onChange={(e) => onChange(variable.key, e.target.value)}
-                className={`w-full rounded-md border bg-white px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground transition-shadow focus:outline-none focus:ring-[3px] focus:ring-primary/30 ${
+                className={`h-10 w-full rounded-[10px] border bg-white px-3.5 text-sm text-slate-900 shadow-sm placeholder:text-slate-300 transition-all focus:outline-none focus:ring-[3px] focus:ring-primary/25 ${
                   hasError
                     ? 'border-rose-300'
-                    : 'border-gray-200 focus:border-primary'
+                    : 'border-slate-200 hover:border-slate-300 focus:border-primary'
                 }`}
               />
             )}
