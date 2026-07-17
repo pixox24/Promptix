@@ -7,8 +7,13 @@ import {
   providerAdapterSchema,
 } from '@promptix/shared';
 import { getDb } from '../db/client.js';
-import { providerModels, providers } from '../db/schema.js';
+import { generationJobs, providerModels, providers } from '../db/schema.js';
 import { requireAdmin, type AdminVars } from '../lib/auth.js';
+import { enqueueGenerationJob } from '../lib/job-enqueue.js';
+import {
+  providerTextTestProblem,
+  providerTextTestProblemResponse,
+} from '../lib/provider-text-test.js';
 import { fail, ok } from '../lib/response.js';
 
 const providerInput = z.object({
@@ -18,6 +23,10 @@ const providerInput = z.object({
   apiKeyEnv: z.string().regex(/^[A-Z][A-Z0-9_]*$/).optional().nullable(),
   authStyle: z.enum(['bearer', 'header']).default('bearer'),
   enabled: z.boolean().default(true),
+});
+
+const providerTestInput = z.object({
+  modelId: z.string().uuid(),
 });
 
 function legacyProtocol(adapterType: z.infer<typeof providerAdapterSchema>) {
@@ -77,6 +86,47 @@ providerRoutes.post('/', async (c) => {
     isDefault: false,
   }).returning();
   return ok(c, safeProvider(row), 201);
+});
+
+providerRoutes.post('/:providerId/test', async (c) => {
+  const parsed = providerTestInput.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid provider test', 400);
+  }
+
+  const [provider] = await getDb().select().from(providers)
+    .where(eq(providers.id, c.req.param('providerId')))
+    .limit(1);
+  if (!provider) return fail(c, 'NOT_FOUND', 'Provider not found', 404);
+
+  const [model] = await getDb().select().from(providerModels)
+    .where(eq(providerModels.id, parsed.data.modelId))
+    .limit(1);
+  const problem = providerTextTestProblem(provider, model ?? null, process.env);
+  if (problem) {
+    const response = providerTextTestProblemResponse[problem];
+    return fail(c, problem, response.message, response.status);
+  }
+
+  const [job] = await getDb().insert(generationJobs).values({
+    type: 'provider_test',
+    status: 'pending',
+    actorId: c.get('admin').sub,
+    providerId: provider.id,
+    modelId: model!.id,
+    input: {},
+  }).returning();
+  try {
+    await enqueueGenerationJob(job.id, { attempts: 1 });
+  } catch (error) {
+    await getDb().update(generationJobs).set({
+      status: 'failed',
+      errorMessage: error instanceof Error ? error.message : 'Queue unavailable',
+      finishedAt: new Date(),
+    }).where(eq(generationJobs.id, job.id));
+    return fail(c, 'QUEUE_UNAVAILABLE', 'Redis queue is unavailable', 503);
+  }
+  return ok(c, { jobId: job.id, status: 'queued' }, 202);
 });
 
 providerRoutes.patch('/:id', async (c) => {

@@ -10,8 +10,8 @@ import { getDb } from '../db/client.js';
 import { generationJobs, mediaObjects, providerModels, providers, promptTemplates } from '../db/schema.js';
 import { requireAdmin, type AdminVars } from '../lib/auth.js';
 import { fail, ok } from '../lib/response.js';
-import { getJobQueue, QUEUE_NAME } from '../lib/queue.js';
-import { loadEnv } from '../config/env.js';
+import { getJobQueue } from '../lib/queue.js';
+import { enqueueGenerationJob } from '../lib/job-enqueue.js';
 import { putObject, storageKind } from '../lib/storage.js';
 import {
   clearTerminalQueueJobForRetry,
@@ -30,15 +30,6 @@ const jobInput = z.object({
   providerId: z.string().uuid().optional(),
   templateId: z.string().optional(),
 });
-
-async function enqueue(jobId:string) {
-  await getDb().update(generationJobs).set({
-    status:'queued',
-    queueName:QUEUE_NAME,
-    bullJobId:jobId,
-  }).where(eq(generationJobs.id,jobId));
-  await getJobQueue().add('execute',{jobId},{jobId,attempts:loadEnv().JOB_ATTEMPTS,backoff:{type:'exponential',delay:1000},removeOnComplete:100,removeOnFail:500});
-}
 
 async function validatedModel(jobType: JobType, modelId?: string, legacyProviderId?: string) {
   const role = defaultRoleForJob(jobType);
@@ -146,6 +137,7 @@ jobRoutes.get('/',async(c)=>{
 jobRoutes.post('/',async(c)=>{
   const parsed=jobInput.safeParse(await c.req.json().catch(()=>null));
   if(!parsed.success)return fail(c,'VALIDATION_ERROR',parsed.error.issues[0]?.message ?? 'Invalid job',400);
+  if(parsed.data.type==='provider_test') return fail(c,'TEST_ROUTE_REQUIRED','Use the provider test endpoint to create provider_test jobs.',400);
   if(parsed.data.type==='text_expand' && typeof parsed.data.input.text!=='string') return fail(c,'TEXT_REQUIRED','input.text is required',400);
   const admin=c.get('admin');
   let selection: { modelId?: string; providerId?: string };
@@ -167,7 +159,7 @@ jobRoutes.post('/',async(c)=>{
     status:'pending',
     actorId:admin.sub,
   }).returning();
-  try { await enqueue(row.id); } catch(e) {
+  try { await enqueueGenerationJob(row.id); } catch(e) {
     await getDb().update(generationJobs).set({status:'failed',errorMessage:e instanceof Error?e.message:'Queue unavailable',finishedAt:new Date()}).where(eq(generationJobs.id,row.id));
     return fail(c,'QUEUE_UNAVAILABLE','Redis queue is unavailable',503);
   }
@@ -197,7 +189,7 @@ jobRoutes.post('/image-reverse',async(c)=>{
   const stored=await putObject(key,Buffer.from(await file.arrayBuffer()),file.type);
   await db.insert(mediaObjects).values({objectKey:key,bucket:storageKind(),url:stored.url,storageClass:'temp',prefixKind:'input',expiresAt:new Date(Date.now()+7*86400000),jobId:row.id,mime:file.type,bytes:file.size});
   await db.update(generationJobs).set({input:{imageUrl:stored.url,objectKey:key}}).where(eq(generationJobs.id,row.id));
-  try{await enqueue(row.id);}catch(e){await db.update(generationJobs).set({status:'failed',errorMessage:e instanceof Error?e.message:'Queue unavailable',finishedAt:new Date()}).where(eq(generationJobs.id,row.id));return fail(c,'QUEUE_UNAVAILABLE','Redis queue is unavailable',503);}
+  try{await enqueueGenerationJob(row.id);}catch(e){await db.update(generationJobs).set({status:'failed',errorMessage:e instanceof Error?e.message:'Queue unavailable',finishedAt:new Date()}).where(eq(generationJobs.id,row.id));return fail(c,'QUEUE_UNAVAILABLE','Redis queue is unavailable',503);}
   return ok(c,{jobId:row.id,status:'queued'},202);
 });
 jobRoutes.get('/:id',async(c)=>{
@@ -217,7 +209,7 @@ jobRoutes.post('/:id/retry',async(c)=>{
     return fail(c, 'QUEUE_UNAVAILABLE', 'Redis queue is unavailable', 503);
   }
   await getDb().update(generationJobs).set({status:'pending',errorMessage:null,startedAt:null,finishedAt:null}).where(eq(generationJobs.id,id));
-  try{await enqueue(id);}catch(e){
+  try{await enqueueGenerationJob(id);}catch(e){
     await getDb().update(generationJobs).set({status:'failed',errorMessage:e instanceof Error?e.message:'Queue unavailable',finishedAt:new Date()}).where(eq(generationJobs.id,id));
     return fail(c,'QUEUE_UNAVAILABLE','Redis queue is unavailable',503);
   }
