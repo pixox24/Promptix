@@ -162,26 +162,24 @@ export function FilterSidebar({
           <p className="mt-2 text-[12px] leading-relaxed text-foreground/45">
             搜索与标签，快速定位模板
           </p>
+          <div className="relative mt-4">
+            <IconSearch
+              size={16}
+              className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-foreground/35"
+            />
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => onQueryChange(e.target.value)}
+              placeholder="搜索标题、描述、提示词..."
+              className="h-11 w-full rounded-xl border border-white/60 bg-white/55 py-2 pl-10 pr-3.5 text-[13px] text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] outline-none backdrop-blur-md transition-all placeholder:text-foreground/35 focus:border-primary/50 focus:bg-white/75 focus:ring-[3px] focus:ring-primary/20"
+            />
+          </div>
         </div>
 
         {/* Scrollable body */}
         <div className="sidebar-scroll relative z-10 flex-1 overflow-y-auto overflow-x-hidden px-4 py-5">
           <div className="flex flex-col gap-7">
-            {/* Search */}
-            <div className="relative">
-              <IconSearch
-                size={16}
-                className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-foreground/35"
-              />
-              <input
-                type="search"
-                value={query}
-                onChange={(e) => onQueryChange(e.target.value)}
-                placeholder="搜索标题、描述、提示词..."
-                className="h-11 w-full rounded-xl border border-white/60 bg-white/55 py-2 pl-10 pr-3.5 text-[13px] text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] outline-none backdrop-blur-md transition-all placeholder:text-foreground/35 focus:border-primary/50 focus:bg-white/75 focus:ring-[3px] focus:ring-primary/20"
-              />
-            </div>
-
             {/* Sort */}
             <section>
               <SectionTitle>排序</SectionTitle>
