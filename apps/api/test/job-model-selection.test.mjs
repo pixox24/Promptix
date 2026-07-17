@@ -24,6 +24,11 @@ test('derives model roles and required capabilities for every job type', () => {
   assert.deepEqual(requiredCapabilitiesForJob('image_generate'), ['image']);
 });
 
+test('provider test selects the text role without structured output', () => {
+  assert.equal(defaultRoleForJob('provider_test'), 'text');
+  assert.deepEqual(requiredCapabilitiesForJob('provider_test'), ['text']);
+});
+
 test('legacy selection prefers old default, then role default, and filters capabilities', () => {
   const rows = [
     candidate({ id: 'wrong', modelId: 'new-image', capabilities: ['image'] }),

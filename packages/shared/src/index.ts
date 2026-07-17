@@ -88,8 +88,18 @@ export const jobTypeSchema = z.enum([
   'text_expand',
   'image_generate',
   'structure',
+  'provider_test',
 ]);
 export type JobType = z.infer<typeof jobTypeSchema>;
+
+export const providerTextTestResultSchema = z.object({
+  ok: z.literal(true),
+  providerId: z.string().uuid(),
+  modelId: z.string().uuid(),
+  latencyMs: z.number().int().nonnegative(),
+  checkedAt: z.string().datetime(),
+});
+export type ProviderTextTestResult = z.infer<typeof providerTextTestResultSchema>;
 
 export const jobStatusSchema = z.enum([
   'pending',

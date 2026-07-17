@@ -16,6 +16,7 @@ export function defaultRoleForJob(jobType: JobType): JobModelRole | null {
     case 'text_expand':
     case 'structure':
     case 'image_reverse':
+    case 'provider_test':
       return 'text';
     case 'image_generate':
       return 'image';
@@ -30,6 +31,8 @@ export function requiredCapabilitiesForJob(jobType: JobType): ModelCapability[] 
     case 'structure':
     case 'image_reverse':
       return ['text', 'structured_output'];
+    case 'provider_test':
+      return ['text'];
     case 'image_generate':
       return ['image'];
     case 'noop':

@@ -37,6 +37,17 @@ test('requires the complete capability set for each job type', () => {
   );
 });
 
+test('provider test requires text but not structured output', () => {
+  assert.equal(roleForJob('provider_test'), 'text');
+  assert.doesNotThrow(() => assertCapabilitiesForJob(
+    model({ capabilities: ['text'] }), 'provider_test',
+  ));
+  assert.throws(
+    () => assertCapabilitiesForJob(model({ capabilities: ['structured_output'] }), 'provider_test'),
+    /text capability/,
+  );
+});
+
 test('image reverse only needs fallback when primary model lacks vision', () => {
   assert.equal(imageReverseNeedsVisionFallback(model({
     capabilities: ['text', 'structured_output', 'vision'],

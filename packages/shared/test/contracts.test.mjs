@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  jobTypeSchema,
   parseRedisConnection,
   providerAdapterSchema,
   providerAdapterCapabilityError,
   providerModelInputSchema,
+  providerTextTestResultSchema,
   publishableTemplateSchema,
   templateDraftSchema,
 } from '../dist/index.js';
@@ -136,4 +138,16 @@ test('adapter and declared capabilities must be executable by the factory', () =
   assert.match(providerAdapterCapabilityError('deepseek', ['image']), /image models/);
   assert.equal(providerAdapterCapabilityError('openai', ['image']), null);
   assert.equal(providerAdapterCapabilityError('google', ['image']), null);
+});
+
+test('provider test is a bounded text-only job type', () => {
+  assert.equal(jobTypeSchema.safeParse('provider_test').success, true);
+  assert.equal(providerTextTestResultSchema.safeParse({
+    ok: true,
+    providerId: '00000000-0000-4000-8000-000000000001',
+    modelId: '00000000-0000-4000-8000-000000000002',
+    latencyMs: 23,
+    checkedAt: '2026-07-17T00:00:00.000Z',
+  }).success, true);
+  assert.equal(providerTextTestResultSchema.safeParse({ ok: true }).success, false);
 });
