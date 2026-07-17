@@ -55,6 +55,30 @@ test('uses a fixed minimal text request and stores no generated text', async () 
   ]);
 });
 
+test('uses a 30-second abort signal without waiting for it to expire', async () => {
+  process.env.TEST_MODEL_FACTORY_KEY = 'test-secret';
+  const originalTimeout = AbortSignal.timeout;
+  const controller = new AbortController();
+  let timeoutMs;
+  let request;
+  AbortSignal.timeout = (value) => {
+    timeoutMs = value;
+    return controller.signal;
+  };
+  try {
+    await runProviderTextTest(config, async (value) => {
+      request = value;
+      return { text: 'OK' };
+    });
+  } finally {
+    AbortSignal.timeout = originalTimeout;
+  }
+
+  assert.equal(timeoutMs, 30_000);
+  assert.equal(request.abortSignal, controller.signal);
+  assert.equal(request.abortSignal.aborted, false);
+});
+
 test('redacts authentication material in an upstream failure', async () => {
   process.env.TEST_MODEL_FACTORY_KEY = 'test-secret';
   await assert.rejects(
@@ -107,5 +131,25 @@ test('redacts unknown-error credentials and limits their stored length', async (
     (error) => error.message.startsWith('Provider test failed: ') &&
       error.message.length <= 'Provider test failed: '.length + 240 &&
       !error.message.includes(secret),
+  );
+});
+
+test('redacts bare credential labels and equals-form API keys in unknown errors', async () => {
+  process.env.TEST_MODEL_FACTORY_KEY = 'test-secret';
+  const secrets = [
+    'bare-bearer-token',
+    'bare-header-token',
+    'snake-colon-token',
+    'snake-equals-token',
+    'camel-colon-token',
+    'camel-equals-token',
+  ];
+  const upstreamMessage = `unexpected Bearer ${secrets[0]}; X-API-Key ${secrets[1]}; api_key: ${secrets[2]}; api_key=${secrets[3]}; apiKey: ${secrets[4]}; apiKey=${secrets[5]}`;
+  await assert.rejects(
+    () => runProviderTextTest(config, async () => {
+      throw new Error(upstreamMessage);
+    }),
+    (error) => error.message.startsWith('Provider test failed: ') &&
+      secrets.every((secret) => !error.message.includes(secret)),
   );
 });

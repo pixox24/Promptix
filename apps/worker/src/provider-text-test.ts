@@ -41,15 +41,15 @@ function statusCode(error: unknown, message: string) {
 function redactCredentials(message: string) {
   return message
     .replace(
-      /(authorization\s*:\s*bearer\s+)([^\s,;'"`}\]]+)/gi,
+      /(\b(?:(?:authorization\s*(?::|=)\s*)?bearer)\s+)([^\s,;'"`}\]]+)/gi,
       '$1[REDACTED]',
     )
     .replace(
-      /\b(x-api-key\s*(?::|=)\s*)([^\s,;'"`}\]]+)/gi,
+      /(\bx-api-key(?:\s*(?::|=)\s*|\s+))([^\s,;'"`}\]]+)/gi,
       '$1[REDACTED]',
     )
     .replace(
-      /((?:["'](?:api_key|apiKey)["']|(?:api_key|apiKey))\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s,}\]]+)/gi,
+      /((?:["'](?:api_key|apiKey)["']|(?:api_key|apiKey))\s*(?::|=)\s*)(?:"[^"]*"|'[^']*'|[^\s,}\]]+)/gi,
       '$1[REDACTED]',
     );
 }
