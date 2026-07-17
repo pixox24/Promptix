@@ -27,8 +27,8 @@
 
 ### Provider 连接测试
 
-- 在 **Providers & Models** 中为 Provider 点击“测试连接”，再选择一个已启用且具备 `text` 能力的 Model。
-- 测试会创建 `provider_test` 队列任务，并使用 Worker 的实际密钥、网络与模型调用链路；成功只记录 Provider、Model、耗时和检查时间。
+- 在 **Providers & Models** 中为 Provider 点击“测试连接”，再选择一个属于当前 Provider、已启用且具备 `text` 能力的 Model。
+- 测试会创建 `provider_test` 队列任务，并使用 Worker 的实际密钥、网络与模型调用链路；成功只记录 `ok`、`providerId`、`modelId`、`latencyMs` 和 `checkedAt`，不包含原始模型响应、凭据或请求/认证头。
 - 失败时先在任务中心查看安全错误摘要：密钥未配置、401/403、404、429、超时或网络失败；修复后可重试。
 - “key 已配置”仅表示 API 进程读到了环境变量，不能替代一次成功的连接测试。
 
