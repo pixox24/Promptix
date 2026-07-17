@@ -5,6 +5,7 @@ import { loadEnvFile, redisConnection } from './env.js';
 loadEnvFile();
 const { db, generationJobs } = await import('./db.js');
 const { describeImage, generateImage, structurePrompt } = await import('./adapters.js');
+const { runProviderTextTest } = await import('./provider-text-test.js');
 const {
   resolveDefaultVisionModel,
   resolvePrimaryModel,
@@ -40,7 +41,9 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<{jobId:string}>)=>{
         }).where(eq(generationJobs.id, record.id));
       }
 
-      if (jobType === 'image_generate') {
+      if (jobType === 'provider_test') {
+        output = await runProviderTextTest(primary);
+      } else if (jobType === 'image_generate') {
         output = await generateImage(primary, record.input as Record<string, unknown>);
       } else if (jobType === 'image_reverse') {
         const imageUrl = (record.input as { imageUrl?: unknown }).imageUrl;
