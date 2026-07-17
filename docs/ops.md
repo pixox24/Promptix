@@ -25,6 +25,13 @@
 - `openai_compatible`、`openai`、`anthropic`、`google`、`deepseek` 的标准能力由 AI SDK 7 执行；`custom_65535_async` 仅用于异步生图。
 - API 与 Worker 必须获得同名密钥环境变量。后台只显示密钥是否已配置，不返回密钥值。
 
+### Provider 连接测试
+
+- 在 **Providers & Models** 中为 Provider 点击“测试连接”，再选择一个已启用且具备 `text` 能力的 Model。
+- 测试会创建 `provider_test` 队列任务，并使用 Worker 的实际密钥、网络与模型调用链路；成功只记录 Provider、Model、耗时和检查时间。
+- 失败时先在任务中心查看安全错误摘要：密钥未配置、401/403、404、429、超时或网络失败；修复后可重试。
+- “key 已配置”仅表示 API 进程读到了环境变量，不能替代一次成功的连接测试。
+
 新任务会同时保存 `model_id` 与所属 `provider_id`。旧客户端仍可暂时只传 `providerId`；系统会优先选择该 Provider 的旧默认模型、相应角色默认模型，再选择首个能力兼容模型。
 
 ## 升级与迁移验收
