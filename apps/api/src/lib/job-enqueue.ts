@@ -4,6 +4,10 @@ import { generationJobs } from '../db/schema.js';
 import { loadEnv } from '../config/env.js';
 import { getJobQueue, QUEUE_NAME } from './queue.js';
 
+export function retryEnqueueOptions(jobType: string): { attempts?: number } {
+  return jobType === 'provider_test' ? { attempts: 1 } : {};
+}
+
 export async function enqueueGenerationJob(
   jobId: string,
   options: { attempts?: number } = {},

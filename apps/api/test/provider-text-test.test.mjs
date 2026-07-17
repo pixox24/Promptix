@@ -4,6 +4,7 @@ import {
   providerTextTestProblem,
   providerTextTestProblemResponse,
 } from '../dist/lib/provider-text-test.js';
+import { retryEnqueueOptions } from '../dist/lib/job-enqueue.js';
 
 const enabledProvider = { id: 'provider-a', enabled: true, apiKeyEnv: 'TEST_KEY' };
 const textModel = {
@@ -36,4 +37,9 @@ test('maps provider test problems to stable, secret-free responses', () => {
     message: 'The provider key is not configured in the API environment',
   });
   assert.equal('apiKey' in providerTextTestProblemResponse.PROVIDER_KEY_NOT_CONFIGURED, false);
+});
+
+test('provider-test manual retries use one attempt while ordinary retries keep defaults', () => {
+  assert.deepEqual(retryEnqueueOptions('provider_test'), { attempts: 1 });
+  assert.deepEqual(retryEnqueueOptions('text_expand'), {});
 });

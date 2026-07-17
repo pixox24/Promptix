@@ -11,7 +11,7 @@ import { generationJobs, mediaObjects, providerModels, providers, promptTemplate
 import { requireAdmin, type AdminVars } from '../lib/auth.js';
 import { fail, ok } from '../lib/response.js';
 import { getJobQueue } from '../lib/queue.js';
-import { enqueueGenerationJob } from '../lib/job-enqueue.js';
+import { enqueueGenerationJob, retryEnqueueOptions } from '../lib/job-enqueue.js';
 import { putObject, storageKind } from '../lib/storage.js';
 import {
   clearTerminalQueueJobForRetry,
@@ -209,7 +209,7 @@ jobRoutes.post('/:id/retry',async(c)=>{
     return fail(c, 'QUEUE_UNAVAILABLE', 'Redis queue is unavailable', 503);
   }
   await getDb().update(generationJobs).set({status:'pending',errorMessage:null,startedAt:null,finishedAt:null}).where(eq(generationJobs.id,id));
-  try{await enqueueGenerationJob(id);}catch(e){
+  try{await enqueueGenerationJob(id, retryEnqueueOptions(row.type));}catch(e){
     await getDb().update(generationJobs).set({status:'failed',errorMessage:e instanceof Error?e.message:'Queue unavailable',finishedAt:new Date()}).where(eq(generationJobs.id,id));
     return fail(c,'QUEUE_UNAVAILABLE','Redis queue is unavailable',503);
   }
