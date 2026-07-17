@@ -4,6 +4,7 @@ import {
   eligibleProviderTextModels,
   initialProviderTextTestModelId,
   isProviderTextTestPending,
+  providerTextTestStatusAnnouncement,
 } from '../src/lib/provider-text-test-ui.ts';
 import type { AdminModel, ProviderConnection } from '../src/types/adminModels.ts';
 
@@ -33,4 +34,14 @@ test('treats queued and running jobs as non-dismissible pending work', () => {
   assert.equal(isProviderTextTestPending('running'), true);
   assert.equal(isProviderTextTestPending('succeeded'), false);
   assert.equal(isProviderTextTestPending('failed'), false);
+});
+
+test('uses distinct status announcements for connection test progress and terminal states', () => {
+  assert.equal(providerTextTestStatusAnnouncement('queued'), 'Connection test is queued.');
+  assert.equal(providerTextTestStatusAnnouncement('running'), 'Connection test is running.');
+  assert.equal(providerTextTestStatusAnnouncement('succeeded'), 'Connection and text call succeeded.');
+  assert.equal(
+    providerTextTestStatusAnnouncement('failed', 'The upstream endpoint rejected the request.'),
+    'Connection test failed. The upstream endpoint rejected the request.',
+  );
 });

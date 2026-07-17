@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api';
 import type {
   AdminModel,
@@ -11,6 +11,7 @@ import {
   eligibleProviderTextModels,
   initialProviderTextTestModelId,
   isProviderTextTestPending,
+  providerTextTestStatusAnnouncement,
 } from '../../lib/provider-text-test-ui';
 
 const field = 'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100';
@@ -70,8 +71,12 @@ export function ProviderModelsPage() {
   const [selectedTestModelId, setSelectedTestModelId] = useState('');
   const [providerTestJob, setProviderTestJob] = useState<ProviderTextTestJob | null>(null);
   const [providerTestSubmitting, setProviderTestSubmitting] = useState(false);
+  const testDialogRef = useRef<HTMLDialogElement>(null);
   const testModels = testProvider ? eligibleProviderTextModels(testProvider, models) : [];
   const selectedTestModel = testModels.find((model) => model.id === selectedTestModelId);
+  const providerTestStatus = providerTestSubmitting
+    ? 'Creating connection test.'
+    : providerTextTestStatusAnnouncement(providerTestJob?.status ?? null, providerTestJob?.errorMessage);
 
   const load = useCallback(async () => {
     const [providerRows, modelRows] = await Promise.all([
@@ -88,6 +93,16 @@ export function ProviderModelsPage() {
   useEffect(() => {
     load().catch((error) => setMessage(error instanceof Error ? error.message : '配置加载失败'));
   }, [load]);
+
+  useEffect(() => {
+    const dialog = testDialogRef.current;
+    if (!testProvider || !dialog) return;
+    dialog.showModal();
+    dialog.querySelector<HTMLSelectElement>('select')?.focus();
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, [testProvider]);
 
   useEffect(() => {
     if (!providerTestJob || !isProviderTextTestPending(providerTestJob.status)) return;
@@ -382,12 +397,14 @@ export function ProviderModelsPage() {
       </div>)}
     </section>
 
-    {testProvider && <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-950/40 p-4">
-      <div
-        role="dialog"
-        aria-modal="true"
+    {testProvider && <dialog
+        ref={testDialogRef}
         aria-labelledby="provider-text-test-title"
-        className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl"
+        onCancel={(event) => {
+          event.preventDefault();
+          closeProviderTest();
+        }}
+        className="w-full max-w-lg rounded-xl border-0 bg-white p-6 shadow-xl backdrop:bg-gray-950/40"
       >
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -407,6 +424,7 @@ export function ProviderModelsPage() {
         <p className="mt-4 rounded-lg bg-violet-50 px-3 py-2 text-sm text-violet-800">
           This sends one fixed, low-cost text request: Reply with OK only (temperature 0, 16 tokens max).
         </p>
+        <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{providerTestStatus}</p>
 
         <label className="mt-4 block text-sm font-medium text-gray-700">
           Text model
@@ -462,7 +480,6 @@ export function ProviderModelsPage() {
               : 'Test connection'}
           </button>
         </div>
-      </div>
-    </div>}
+    </dialog>}
   </>;
 }

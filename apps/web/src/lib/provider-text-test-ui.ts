@@ -22,3 +22,20 @@ export function initialProviderTextTestModelId(models: AdminModel[]) {
 export function isProviderTextTestPending(status: ProviderTextTestJob['status']) {
   return status === 'pending' || status === 'queued' || status === 'running';
 }
+
+export function providerTextTestStatusAnnouncement(
+  status: ProviderTextTestJob['status'] | null,
+  errorMessage?: string | null,
+) {
+  switch (status) {
+    case 'pending': return 'Connection test is pending.';
+    case 'queued': return 'Connection test is queued.';
+    case 'running': return 'Connection test is running.';
+    case 'succeeded': return 'Connection and text call succeeded.';
+    case 'failed': return errorMessage
+      ? `Connection test failed. ${errorMessage}`
+      : 'Connection test failed.';
+    case 'cancelled': return 'Connection test was cancelled.';
+    default: return '';
+  }
+}
