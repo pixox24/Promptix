@@ -22,6 +22,48 @@
       "when": 1784212587989,
       "tag": "0002_ai_sdk_model_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784292322887,
+      "tag": "0003_ingest_system_prompts",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784383200000,
+      "tag": "0004_public_generations",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784386800000,
+      "tag": "0005_variable_suggestions",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784390400000,
+      "tag": "0006_featured_template_rank",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784394000000,
+      "tag": "0007_ingest_json_prompts",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784397600000,
+      "tag": "0008_image_reverse_pipeline",
+      "breakpoints": true
     }
   ]
 }

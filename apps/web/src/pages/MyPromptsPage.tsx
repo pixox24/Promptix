@@ -160,7 +160,7 @@ export function MyPromptsPage() {
                 className="flex gap-4 overflow-hidden rounded-[6px] border border-gray-100 bg-white p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
               >
                 <Link
-                  to={`/template/${draft.templateId}`}
+                  to={`/template/${draft.templateId}?draft=${encodeURIComponent(draft.id)}`}
                   className="h-28 w-20 shrink-0 overflow-hidden rounded-[6px] bg-gray-50"
                 >
                   <img
@@ -171,7 +171,7 @@ export function MyPromptsPage() {
                 </Link>
                 <div className="min-w-0 flex-1">
                   <Link
-                    to={`/template/${draft.templateId}`}
+                    to={`/template/${draft.templateId}?draft=${encodeURIComponent(draft.id)}`}
                     className="block truncate text-sm font-semibold text-foreground hover:underline"
                   >
                     {draft.templateName}
@@ -192,7 +192,7 @@ export function MyPromptsPage() {
                         <IconCopy size={14} />
                         复制
                       </Button>
-                      <Link to={`/template/${draft.templateId}`}>
+                      <Link to={`/template/${draft.templateId}?draft=${encodeURIComponent(draft.id)}`}>
                         <Button size="sm">继续编辑</Button>
                       </Link>
                       <Button

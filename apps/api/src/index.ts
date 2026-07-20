@@ -10,6 +10,8 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { providerRoutes } from './routes/providers.js';
 import { modelRoutes } from './routes/models.js';
 import { jobRoutes } from './routes/jobs.js';
+import { ingestRoutes } from './routes/ingest.js';
+import { generationRoutes } from './routes/generations.js';
 import { mkdirSync } from 'node:fs';
 import { localStorageRoot } from './lib/storage.js';
 import path from 'node:path';
@@ -56,6 +58,8 @@ app.route('/api/templates', publicTemplateRoutes);
 app.route('/api/admin/providers', providerRoutes);
 app.route('/api/admin/models', modelRoutes);
 app.route('/api/admin/jobs', jobRoutes);
+app.route('/api/admin/ingest', ingestRoutes);
+app.route('/api/generations', generationRoutes);
 try { mkdirSync(localStorageRoot(), { recursive: true }); } catch { /* health remains available with incomplete env */ }
 app.use('/uploads/*', serveStatic({ root: path.dirname(localStorageRoot()) }));
 

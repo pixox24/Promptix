@@ -10,6 +10,8 @@ import { fetchTemplates } from '../data/templateApi';
 import type { PromptTemplate } from '../types/prompt';
 import type { SortOption, TemplateCategory } from '../types/prompt';
 import { categoryLabelMap } from '../data/categories';
+import { TEMPLATE_USE_SCENARIOS } from '@promptix/shared';
+import { compareTemplates } from '../lib/templateRanking';
 
 export function LibraryPage() {
   const [params, setParams] = useSearchParams();
@@ -56,6 +58,12 @@ export function LibraryPage() {
     update({ tags: list.length ? list.join(',') : null });
   };
 
+  const onClearScenarios = () => {
+    const scenarios = new Set<string>(TEMPLATE_USE_SCENARIOS);
+    const remaining = selectedTags.filter((tag) => !scenarios.has(tag));
+    update({ tags: remaining.length ? remaining.join(',') : null });
+  };
+
   const filtered = useMemo(() => {
     let list = [...templates];
 
@@ -75,23 +83,13 @@ export function LibraryPage() {
 
     if (selectedTags.length) {
       list = list.filter((t) =>
-        selectedTags.some((tag) => t.tags.includes(tag)),
+        selectedTags.some(
+          (tag) => t.tags.includes(tag) || t.scenarios.includes(tag),
+        ),
       );
     }
 
-    switch (sort) {
-      case 'latest':
-        list.sort(
-          (a, b) =>
-            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-        );
-        break;
-      case 'favorites':
-        list.sort((a, b) => b.favoriteCount - a.favoriteCount);
-        break;
-      default:
-        list.sort((a, b) => b.useCount - a.useCount);
-    }
+    list.sort(compareTemplates(sort));
 
     return list;
   }, [query, sort, selectedTags, category, templates]);
@@ -103,6 +101,7 @@ export function LibraryPage() {
     onSortChange: (s: SortOption) => update({ sort: s === 'hot' ? null : s }),
     selectedTags,
     onToggleTag,
+    onClearScenarios,
   };
 
   return (

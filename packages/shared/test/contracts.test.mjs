@@ -2,14 +2,102 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   jobTypeSchema,
+  DEFAULT_INGEST_SYSTEM_PROMPTS,
+  ingestFlowTypeSchema,
+  ingestErrorDetailsSchema,
+  ingestProgressSchema,
+  ingestSystemPromptSchema,
+  defaultPromptValues,
+  parseAspectRatio,
+  parsePromptTemplateSegments,
   parseRedisConnection,
   providerAdapterSchema,
   providerAdapterCapabilityError,
   providerModelInputSchema,
   providerTextTestResultSchema,
+  publicGenerationCreateSchema,
   publishableTemplateSchema,
+  renderPromptTemplate,
   templateDraftSchema,
+  validatePromptValues,
 } from '../dist/index.js';
+
+test('renders and segments arbitrary modular prompt variables', () => {
+  const template = {
+    variables: [
+      { id: 'v1', key: 'subject', label: '主体', type: 'text', required: true },
+      { id: 'v2', key: 'ratio', label: '比例', type: 'ratio', options: ['1:1', '16:9'], defaultValue: '1:1' },
+    ],
+    promptTemplate: 'Portrait of {{subject}}, ratio {{ratio}}, keep {{unknown}}',
+  };
+  assert.deepEqual(defaultPromptValues(template.variables), { subject: '', ratio: '1:1' });
+  assert.equal(renderPromptTemplate(template, { subject: 'Ada', ratio: '16:9' }), 'Portrait of Ada, ratio 16:9, keep');
+  assert.deepEqual(parsePromptTemplateSegments(template), [
+    { type: 'text', value: 'Portrait of ' },
+    { type: 'variable', key: 'subject' },
+    { type: 'text', value: ', ratio ' },
+    { type: 'variable', key: 'ratio' },
+    { type: 'text', value: ', keep ' },
+    { type: 'text', value: '{{unknown}}' },
+  ]);
+});
+
+test('validates required, closed options, and unknown values', () => {
+  const variables = [
+    { id: 'v1', key: 'subject', label: '主体', type: 'text', required: true },
+    { id: 'v2', key: 'ratio', label: '比例', type: 'ratio', options: ['1:1'] },
+  ];
+  assert.deepEqual(validatePromptValues(variables, { subject: '', ratio: '16:9', extra: 'x' }).map((issue) => issue.code).sort(), [
+    'invalid_option', 'required', 'unknown_variable',
+  ]);
+});
+
+test('suggestions assist free input without becoming strict options', () => {
+  const variables = [{ id: 'v1', key: 'subject', label: '主体', type: 'text', suggestions: ['年轻女性', '商务男性'] }];
+  assert.equal(templateDraftSchema.safeParse({ ...draft, variables, promptTemplate: '{{subject}}' }).success, true);
+  assert.deepEqual(validatePromptValues(variables, { subject: '完全自定义的主体' }), []);
+});
+
+test('variable value lists are normalized and reject invalid suggestion contracts', () => {
+  const valid = templateDraftSchema.parse({
+    ...draft,
+    variables: [{ ...draft.variables[0], suggestions: ['  商品礼盒  ', '运动鞋', '护肤品', '智能手表'] }],
+  });
+  assert.deepEqual(valid.variables[0].suggestions, ['商品礼盒', '运动鞋', '护肤品', '智能手表']);
+  assert.equal(templateDraftSchema.safeParse({ ...draft, variables: [{ ...draft.variables[0], suggestions: ['重复', '重复'] }] }).success, false);
+  assert.equal(templateDraftSchema.safeParse({ ...draft, variables: [{ ...draft.variables[0], suggestions: Array.from({ length: 9 }, (_, index) => String(index)) }] }).success, false);
+  assert.equal(templateDraftSchema.safeParse({ ...draft, variables: [{ ...draft.variables[0], type: 'image', suggestions: ['图片'] }] }).success, false);
+});
+
+test('normalizes aspect ratios and public generation requests', () => {
+  assert.deepEqual(parseAspectRatio('16:9'), { value: '16:9', width: 16, height: 9, ratio: 16 / 9 });
+  assert.equal(parseAspectRatio('保持原比例'), null);
+  assert.equal(publicGenerationCreateSchema.safeParse({
+    templateId: 'tpl-one', values: { subject: 'Ada' }, clientRequestId: '00000000-0000-4000-8000-000000000001',
+  }).success, true);
+  assert.equal(publicGenerationCreateSchema.safeParse({
+    templateId: 'tpl-one', values: {}, clientRequestId: 'not-a-uuid',
+  }).success, false);
+});
+
+test('ingest prompts are flow-specific and bounded', () => {
+  assert.deepEqual(ingestFlowTypeSchema.options, ['text_expand', 'image_reverse']);
+  assert.notEqual(DEFAULT_INGEST_SYSTEM_PROMPTS.text_expand, DEFAULT_INGEST_SYSTEM_PROMPTS.image_reverse);
+  assert.equal(ingestSystemPromptSchema.parse('  system instruction  '), 'system instruction');
+  assert.equal(ingestSystemPromptSchema.safeParse('   ').success, false);
+  assert.equal(ingestSystemPromptSchema.safeParse('x'.repeat(20_001)).success, false);
+  for (const prompt of Object.values(DEFAULT_INGEST_SYSTEM_PROMPTS)) {
+    assert.match(prompt, /text 变量必须生成 4-6 个 suggestions/);
+    assert.match(prompt, /select 变量生成 4-8 个严格 options/);
+    assert.match(prompt, /image 变量不得生成 options 或 suggestions/);
+  }
+});
+
+test('ingest pipeline contracts bound progress and safe diagnostics', () => {
+  assert.equal(ingestProgressSchema.safeParse({ stage: 'vision', percent: 15, message: '正在理解图片', updatedAt: new Date().toISOString() }).success, true);
+  assert.equal(ingestProgressSchema.safeParse({ stage: 'unknown', percent: 101, message: '', updatedAt: 'now' }).success, false);
+  assert.equal(ingestErrorDetailsSchema.safeParse({ code: 'STRUCTURE_JSON_INVALID', stage: 'structure', retryable: false, outputPreviewStart: 'x'.repeat(501) }).success, false);
+});
 
 test('parses Redis database numbers and encoded credentials consistently', () => {
   assert.deepEqual(

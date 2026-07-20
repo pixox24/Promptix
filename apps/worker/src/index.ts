@@ -1,25 +1,28 @@
-import { Worker, type Job } from 'bullmq';
+import { UnrecoverableError, Worker, type Job } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import { jobTypeSchema } from '@promptix/shared';
 import { loadEnvFile, redisConnection } from './env.js';
+import { effectiveIngestJobInput } from './ingest-job-input.js';
 loadEnvFile();
 const { db, generationJobs } = await import('./db.js');
-const { describeImage, generateImage, structurePrompt } = await import('./adapters.js');
+const { generateImage, structurePrompt } = await import('./adapters.js');
 const { runProviderTextTest } = await import('./provider-text-test.js');
 const {
-  resolveDefaultVisionModel,
   resolvePrimaryModel,
+  resolveImageReverseModels,
 } = await import('./model-resolver.js');
 const {
   assertCapabilitiesForJob,
-  imageReverseNeedsVisionFallback,
 } = await import('./model-routing.js');
+const { persistGeneratedOutput } = await import('./generated-media.js');
+const { runImageReversePipeline } = await import('./image-reverse-pipeline.js');
+const { IngestPipelineError } = await import('./job-errors.js');
 
 const QUEUE_NAME='promptix-jobs';
 const worker=new Worker(QUEUE_NAME,async(job:Job<{jobId:string}>)=>{
   const [record]=await db.select().from(generationJobs).where(eq(generationJobs.id,job.data.jobId)).limit(1);
   if(!record)throw new Error(`Job ${job.data.jobId} not found`);
-  await db.update(generationJobs).set({status:'running',attempts:record.attempts+1,startedAt:new Date(),finishedAt:null,errorMessage:null}).where(eq(generationJobs.id,record.id));
+  await db.update(generationJobs).set({status:'running',attempts:record.attempts+1,startedAt:new Date(),finishedAt:null,errorMessage:null,errorCode:null,errorDetails:null}).where(eq(generationJobs.id,record.id));
   try{
     let output:unknown;
     if(record.type==='noop'){
@@ -27,6 +30,7 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<{jobId:string}>)=>{
       output={ok:true,processedAt:new Date().toISOString()};
     }else{
       const jobType = jobTypeSchema.parse(record.type);
+      const recordInput = effectiveIngestJobInput(jobType, record.input as Record<string, unknown>);
       const primary = await resolvePrimaryModel(
         jobType,
         record.modelId,
@@ -45,31 +49,35 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<{jobId:string}>)=>{
         output = await runProviderTextTest(primary);
       } else if (jobType === 'image_generate') {
         output = await generateImage(primary, record.input as Record<string, unknown>);
+        output = await persistGeneratedOutput(record.id, record.templateId, output);
       } else if (jobType === 'image_reverse') {
         const imageUrl = (record.input as { imageUrl?: unknown }).imageUrl;
         if (typeof imageUrl !== 'string') {
           throw new Error('image_reverse job is missing input.imageUrl');
         }
-        if (imageReverseNeedsVisionFallback(primary.model)) {
-          const vision = await resolveDefaultVisionModel();
-          const description = await describeImage(vision, imageUrl);
-          output = await structurePrompt(primary, {
-            text: `以下是视觉模型对参考图的详细描述。请保留视觉事实并优化为可复用模板：\n${description}`,
-          });
-        } else {
-          output = await structurePrompt(primary, { imageUrl });
-        }
+        const imageReverseModels = await resolveImageReverseModels({ structureModelId: record.modelId, structureProviderId: record.providerId, visionModelId: record.visionModelId });
+        const pipeline = await runImageReversePipeline({
+          imageUrl,
+          systemPrompt: String(recordInput.systemPrompt),
+          vision: imageReverseModels.vision,
+          structure: imageReverseModels.structure,
+          onProgress: async(progress) => { await db.update(generationJobs).set({progress}).where(eq(generationJobs.id,record.id)); },
+        });
+        output = pipeline.draft;
+        await db.update(generationJobs).set({resultMeta:pipeline.resultMeta}).where(eq(generationJobs.id,record.id));
       } else {
-        output = await structurePrompt(primary, record.input as Record<string, unknown>);
+        output = await structurePrompt(primary, recordInput);
       }
     }
-    await db.update(generationJobs).set({status:'succeeded',output,finishedAt:new Date(),errorMessage:null}).where(eq(generationJobs.id,record.id));
+    await db.update(generationJobs).set({status:'succeeded',output,finishedAt:new Date(),errorMessage:null,errorCode:null,errorDetails:null}).where(eq(generationJobs.id,record.id));
     console.log(JSON.stringify({level:'info',event:'job_succeeded',jobId:record.id,type:record.type}));
     return output;
   }catch(error){
     const message=error instanceof Error?error.message:String(error);
-    await db.update(generationJobs).set({status:'failed',errorMessage:message,finishedAt:new Date()}).where(eq(generationJobs.id,record.id));
+    const pipelineError = error instanceof IngestPipelineError ? error : null;
+    await db.update(generationJobs).set({status:'failed',errorMessage:message,errorCode:pipelineError?.details.code,errorDetails:pipelineError?.details,finishedAt:new Date()}).where(eq(generationJobs.id,record.id));
     console.error(JSON.stringify({level:'error',event:'job_failed',jobId:record.id,type:record.type,error:message}));
+    if (pipelineError && !pipelineError.details.retryable) throw new UnrecoverableError(message);
     throw error;
   }
 },{connection:redisConnection(),concurrency:Number(process.env.WORKER_CONCURRENCY??2)});

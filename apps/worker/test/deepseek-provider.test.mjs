@@ -50,6 +50,7 @@ test('AI SDK produces and normalizes a TemplateDraft', async () => {
   globalThis.fetch = async (url, init) => {
     assert.equal(url, 'https://api.deepseek.com/chat/completions');
     const body = JSON.parse(init.body);
+    assert.equal(body.messages.some((message) => message.role === 'system' && message.content === 'CUSTOM SYSTEM'), true);
     assert.equal(body.model, 'deepseek-v4-pro');
     assert.equal(body.thinking.type, 'disabled');
     return new Response(JSON.stringify({
@@ -66,7 +67,7 @@ test('AI SDK produces and normalizes a TemplateDraft', async () => {
     }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
   try {
-    const result = await structurePrompt({ provider, model }, { text: '优化猫咪插画' });
+    const result = await structurePrompt({ provider, model }, { text: '优化猫咪插画', systemPrompt: 'CUSTOM SYSTEM' });
     assert.equal(result.name, '优化模板');
     assert.equal(result.variables[0].id, 'var-1');
   } finally {

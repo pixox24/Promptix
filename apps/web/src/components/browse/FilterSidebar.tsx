@@ -2,46 +2,42 @@ import {
   IconClock,
   IconFlame,
   IconSearch,
+  IconSpark,
   IconTrophy,
 } from '../icons';
 import type { SortOption } from '../../types/prompt';
+import { TEMPLATE_USE_SCENARIOS } from '@promptix/shared';
 
-export const useScenarios = [
-  '产品营销',
-  '社交媒体帖子',
-  '海报 / 传单',
-  '游戏素材',
-  '漫画 / 故事板',
-  '信息图 / 教育视觉图',
-] as const;
+export const useScenarios = TEMPLATE_USE_SCENARIOS;
 
 export const styleFilters = [
+  '写实摄影',
+  '电影感•电影剧照',
   '3D 渲染',
-  '动漫 / 漫画',
-  'Q版 / Q萌风',
-  '电影 / 电影剧照',
-  '插画',
-  '等距',
+  '动漫•二次元',
+  '商业插画',
+  '概念艺术/游戏原画',
   '极简主义',
-  '油画',
-  '摄影',
-  '复古 / 怀旧',
-  '水彩画',
+  '复古•怀旧',
+  '水彩与手绘',
+  '油画与古典绘画',
+  'Q 版•萌系角色',
+  '等距•信息可视化',
 ] as const;
 
 export const themeFilters = [
-  '摘要 / 背景',
-  '建筑 / 室内设计',
-  '角色',
-  '城市风光 / 街道',
-  '时尚单品',
-  '食品 / 饮料',
-  '团体 / 情侣',
-  '网红 / 模特',
-  '风景 / 自然',
-  '人像 / 自拍',
-  '产品',
-  '文本 / 排版',
+  '人像•人物',
+  '产品•商品',
+  '角色•IP',
+  '自然•风景',
+  '建筑•室内',
+  '时尚•服饰',
+  '城市•街头',
+  '食品•饮料',
+  '动物•宠物',
+  '人物关系•生活方式',
+  '抽象•背景',
+  '文字•排版',
 ] as const;
 
 const sortItems: {
@@ -50,6 +46,7 @@ const sortItems: {
   icon: typeof IconFlame;
 }[] = [
   { id: 'hot', label: '热门', icon: IconFlame },
+  { id: 'featured', label: '精选', icon: IconSpark },
   { id: 'favorites', label: '高赞', icon: IconTrophy },
   { id: 'latest', label: '最新', icon: IconClock },
 ];
@@ -61,6 +58,7 @@ interface FilterSidebarProps {
   onSortChange: (s: SortOption) => void;
   selectedTags: string[];
   onToggleTag: (tag: string) => void;
+  onClearScenarios: () => void;
 }
 
 function SectionTitle({ children }: { children: string }) {
@@ -74,54 +72,64 @@ function SectionTitle({ children }: { children: string }) {
   );
 }
 
-function CheckboxRow({
-  label,
-  checked,
-  onChange,
+function ScenarioTags({
+  selectedTags,
+  onToggleTag,
+}: Pick<FilterSidebarProps, 'selectedTags' | 'onToggleTag'>) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {useScenarios.map((scenario) => {
+        const selected = selectedTags.includes(scenario);
+        return (
+          <button
+            key={scenario}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => onToggleTag(scenario)}
+            className={`max-w-full rounded-lg border px-2.5 py-1.5 text-left text-[11px] font-medium leading-snug transition-colors ${
+              selected
+                ? 'border-primary bg-primary/12 text-foreground shadow-[0_0_0_1px_color-mix(in_srgb,var(--color-primary)_25%,transparent)]'
+                : 'border-black/10 bg-white/55 text-foreground/65 hover:border-primary/40 hover:bg-white/80 hover:text-foreground'
+            }`}
+          >
+            {scenario}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FilterTags({
+  options,
+  selectedTags,
+  onToggleTag,
 }: {
-  label: string;
-  checked: boolean;
-  onChange: () => void;
+  options: readonly string[];
+  selectedTags: string[];
+  onToggleTag: (tag: string) => void;
 }) {
   return (
-    <label
-      className={`group flex cursor-pointer items-center gap-3 rounded-xl px-2.5 py-2 text-[13px] transition-all duration-200 ${
-        checked
-          ? 'bg-primary/15 text-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-primary)_35%,transparent)]'
-          : 'text-foreground/70 hover:bg-white/55 hover:text-foreground'
-      }`}
-    >
-      <span
-        className={`relative flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border transition-all duration-200 ${
-          checked
-            ? 'border-primary bg-primary shadow-[0_1px_4px_color-mix(in_srgb,var(--color-primary)_40%,transparent)]'
-            : 'border-black/12 bg-white/70 group-hover:border-black/20'
-        }`}
-        aria-hidden
-      >
-        {checked && (
-          <svg
-            width="11"
-            height="11"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="#0a0a0a"
-            strokeWidth="3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+    <div className="flex flex-wrap gap-2">
+      {options.map((option) => {
+        const selected = selectedTags.includes(option);
+        return (
+          <button
+            key={option}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => onToggleTag(option)}
+            className={`max-w-full rounded-lg border px-2.5 py-1.5 text-left text-[11px] font-medium leading-snug transition-colors ${
+              selected
+                ? 'border-primary bg-primary/12 text-foreground shadow-[0_0_0_1px_color-mix(in_srgb,var(--color-primary)_25%,transparent)]'
+                : 'border-black/10 bg-white/55 text-foreground/65 hover:border-primary/40 hover:bg-white/80 hover:text-foreground'
+            }`}
           >
-            <path d="m5 12 5 5L20 7" />
-          </svg>
-        )}
-      </span>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={onChange}
-        className="sr-only"
-      />
-      <span className="leading-snug">{label}</span>
-    </label>
+            {option}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -132,6 +140,7 @@ export function FilterSidebar({
   onSortChange,
   selectedTags,
   onToggleTag,
+  onClearScenarios,
 }: FilterSidebarProps) {
   return (
     <aside className="sticky top-24 z-20 hidden h-[calc(100vh-7.5rem)] w-[17.5rem] shrink-0 md:block">
@@ -219,47 +228,36 @@ export function FilterSidebar({
 
             {/* 使用场景 */}
             <section>
-              <SectionTitle>使用场景</SectionTitle>
-              <div className="flex flex-col gap-0.5">
-                {useScenarios.map((s) => (
-                  <CheckboxRow
-                    key={s}
-                    label={s}
-                    checked={selectedTags.includes(s)}
-                    onChange={() => onToggleTag(s)}
-                  />
-                ))}
+              <div className="mb-3 flex items-center justify-between gap-2 px-1">
+                <SectionTitle>使用场景</SectionTitle>
+                {selectedTags.some((tag) => useScenarios.includes(tag as (typeof useScenarios)[number])) && (
+                  <button
+                    type="button"
+                    onClick={onClearScenarios}
+                    className="text-[11px] font-medium text-foreground/45 hover:text-foreground"
+                  >
+                    清除
+                  </button>
+                )}
               </div>
+              <div className="mb-2 px-1 text-[11px] text-foreground/45">
+                {selectedTags.filter((tag) => useScenarios.includes(tag as (typeof useScenarios)[number])).length > 0
+                  ? `已选 ${selectedTags.filter((tag) => useScenarios.includes(tag as (typeof useScenarios)[number])).length}`
+                  : '可多选'}
+              </div>
+              <ScenarioTags selectedTags={selectedTags} onToggleTag={onToggleTag} />
             </section>
 
             {/* 风格 */}
             <section>
               <SectionTitle>风格</SectionTitle>
-              <div className="flex flex-col gap-0.5">
-                {styleFilters.map((s) => (
-                  <CheckboxRow
-                    key={s}
-                    label={s}
-                    checked={selectedTags.includes(s)}
-                    onChange={() => onToggleTag(s)}
-                  />
-                ))}
-              </div>
+              <FilterTags options={styleFilters} selectedTags={selectedTags} onToggleTag={onToggleTag} />
             </section>
 
-            {/* 主题 */}
+            {/* 画面主体 */}
             <section>
-              <SectionTitle>主题</SectionTitle>
-              <div className="flex flex-col gap-0.5">
-                {themeFilters.map((s) => (
-                  <CheckboxRow
-                    key={s}
-                    label={s}
-                    checked={selectedTags.includes(s)}
-                    onChange={() => onToggleTag(s)}
-                  />
-                ))}
-              </div>
+              <SectionTitle>画面主体</SectionTitle>
+              <FilterTags options={themeFilters} selectedTags={selectedTags} onToggleTag={onToggleTag} />
             </section>
           </div>
         </div>
@@ -281,6 +279,7 @@ export function MobileFilterBar({
   onSortChange,
   selectedTags,
   onToggleTag,
+  onClearScenarios,
   open,
   onOpenChange,
 }: FilterSidebarProps & {
@@ -306,7 +305,7 @@ export function MobileFilterBar({
           )}
         </span>
         <span className="text-xs text-foreground/45">
-          {sort === 'hot' ? '热门' : sort === 'latest' ? '最新' : '高赞'}
+          {sortItems.find((item) => item.id === sort)?.label ?? '热门'}
         </span>
       </button>
 
@@ -352,49 +351,34 @@ export function MobileFilterBar({
           </div>
 
           <div>
-            <SectionTitle>风格</SectionTitle>
-            <div className="flex flex-wrap gap-2">
-              {styleFilters.map((s) => {
-                const on = selectedTags.includes(s);
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => onToggleTag(s)}
-                    className={`rounded-full px-2.5 py-1.5 text-[11px] font-medium transition-all ${
-                      on
-                        ? 'bg-primary text-primary-foreground shadow-sm'
-                        : 'bg-white/50 text-foreground/65 ring-1 ring-black/5'
-                    }`}
-                  >
-                    {s}
-                  </button>
-                );
-              })}
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <SectionTitle>使用场景</SectionTitle>
+              {selectedTags.some((tag) => useScenarios.includes(tag as (typeof useScenarios)[number])) && (
+                <button
+                  type="button"
+                  onClick={onClearScenarios}
+                  className="text-[11px] font-medium text-foreground/45 hover:text-foreground"
+                >
+                  清除
+                </button>
+              )}
             </div>
+            <div className="mb-2 text-[11px] text-foreground/45">
+              {selectedTags.filter((tag) => useScenarios.includes(tag as (typeof useScenarios)[number])).length > 0
+                ? `已选 ${selectedTags.filter((tag) => useScenarios.includes(tag as (typeof useScenarios)[number])).length}`
+                : '可多选'}
+            </div>
+            <ScenarioTags selectedTags={selectedTags} onToggleTag={onToggleTag} />
           </div>
 
           <div>
-            <SectionTitle>主题</SectionTitle>
-            <div className="flex flex-wrap gap-2">
-              {themeFilters.map((s) => {
-                const on = selectedTags.includes(s);
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => onToggleTag(s)}
-                    className={`rounded-full px-2.5 py-1.5 text-[11px] font-medium transition-all ${
-                      on
-                        ? 'bg-primary text-primary-foreground shadow-sm'
-                        : 'bg-white/50 text-foreground/65 ring-1 ring-black/5'
-                    }`}
-                  >
-                    {s}
-                  </button>
-                );
-              })}
-            </div>
+            <SectionTitle>风格</SectionTitle>
+            <FilterTags options={styleFilters} selectedTags={selectedTags} onToggleTag={onToggleTag} />
+          </div>
+
+          <div>
+            <SectionTitle>画面主体</SectionTitle>
+            <FilterTags options={themeFilters} selectedTags={selectedTags} onToggleTag={onToggleTag} />
           </div>
 
           <button

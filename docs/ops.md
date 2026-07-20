@@ -93,6 +93,12 @@ FROM provider_models;
 
 ## 应用回滚
 
+## 智能入库工作流
+
+`/admin/ingest` 提供“文本优化”和“图片反推”两个独立流程，各自拥有全局系统提示词。提交时可仅修改本次任务；点击“保存为系统提示词”才会更新全局预设。API 在创建任务前将最终提示词写入 job input snapshot，Worker 只读取该快照，因此后续修改全局提示词不会影响已排队任务。
+
+部署包含本功能的版本时，先执行 `npm run db:migrate`，再同时重启 API 与 Worker，确保新增 prompt 表和消费逻辑版本一致。
+
 发布后如需快速回滚，先停止新 API/Worker，再部署旧版本代码。由于迁移保留了旧 Provider 字段和 `generation_jobs.provider_id`，旧代码可继续读取兼容数据；不要为了应用回滚删除 `provider_models` 或 `model_id`。只有灾难恢复时才创建空库并用升级前的 `pg_dump` 通过 `pg_restore` 恢复。
 
 ## 安全基线
@@ -101,3 +107,15 @@ FROM provider_models;
 - 管理端 Cookie 使用 HttpOnly；生产必须设置 `COOKIE_SECURE=true` 并启用 HTTPS。
 - 管理上传限制为图片 MIME 且最大 10MB。
 - 定期审计管理员账号、RAM 最小权限和失败任务日志。
+# 图片反推流水线
+
+图片反推默认先由视觉模型生成客观描述，再由文本结构化模型生成模板 JSON。模型自身的 `temperature` 和 `maxOutputTokens` 配置优先；未配置时使用：
+
+```env
+INGEST_VISION_MAX_OUTPUT_TOKENS=3000
+INGEST_STRUCTURE_MAX_OUTPUT_TOKENS=6000
+INGEST_OUTPUT_PREVIEW_CHARS=500
+INGEST_STRUCTURE_REPAIR_ENABLED=true
+```
+
+结构化失败时检查管理员任务中的 `errorCode`、`errorDetails.finishReason` 和有限输出预览。`STRUCTURE_OUTPUT_TRUNCATED` 表示需要增加结构化模型输出上限；`STRUCTURE_JSON_INVALID` 表示兼容接口返回的正文不是合法 JSON；`STRUCTURE_SCHEMA_INVALID` 表示 JSON 可解析但字段不符合模板契约。

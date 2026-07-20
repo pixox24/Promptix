@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { RecentItem, SavedDraft } from '../types/prompt';
 
-const STORAGE_KEY = 'promptix.userLibrary.v1';
+const STORAGE_KEY = 'promptix.userLibrary.v2';
+const LEGACY_STORAGE_KEY = 'promptix.userLibrary.v1';
 
 interface UserLibraryState {
   favorites: string[];
@@ -15,16 +16,35 @@ const defaultState: UserLibraryState = {
   drafts: [],
 };
 
+export function normalizeLibraryState(value: unknown): UserLibraryState {
+  const parsed = value && typeof value === 'object' ? value as Partial<UserLibraryState> : {};
+  return {
+    favorites: Array.isArray(parsed.favorites) ? parsed.favorites.filter((id): id is string => typeof id === 'string') : [],
+    recent: Array.isArray(parsed.recent) ? parsed.recent.filter((item): item is RecentItem => Boolean(item && typeof item.templateId === 'string' && typeof item.usedAt === 'string')) : [],
+    drafts: Array.isArray(parsed.drafts) ? parsed.drafts.flatMap((draft) => {
+      if (!draft || typeof draft.id !== 'string' || typeof draft.templateId !== 'string') return [];
+      return [{
+        ...draft,
+        version: 2 as const,
+        templateName: typeof draft.templateName === 'string' ? draft.templateName : '',
+        coverImage: typeof draft.coverImage === 'string' ? draft.coverImage : '',
+        values: draft.values && typeof draft.values === 'object' ? draft.values : {},
+        prompt: typeof draft.prompt === 'string' ? draft.prompt : '',
+        promptMode: (draft as Partial<SavedDraft>).promptMode === 'auto' ? 'auto' as const : 'manual' as const,
+        manualPrompt: typeof (draft as Partial<SavedDraft>).manualPrompt === 'string'
+          ? (draft as Partial<SavedDraft>).manualPrompt
+          : typeof draft.prompt === 'string' ? draft.prompt : '',
+        updatedAt: typeof draft.updatedAt === 'string' ? draft.updatedAt : new Date(0).toISOString(),
+      }];
+    }) : [],
+  };
+}
+
 function loadState(): UserLibraryState {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return defaultState;
-    const parsed = JSON.parse(raw) as UserLibraryState;
-    return {
-      favorites: parsed.favorites ?? [],
-      recent: parsed.recent ?? [],
-      drafts: parsed.drafts ?? [],
-    };
+    return normalizeLibraryState(JSON.parse(raw));
   } catch {
     return defaultState;
   }
@@ -76,12 +96,17 @@ export function useUserLibrary() {
       const id = draft.id ?? `draft-${Date.now()}`;
       setState((prev) => {
         const next: SavedDraft = {
+          version: 2,
           id,
           templateId: draft.templateId,
           templateName: draft.templateName,
           coverImage: draft.coverImage,
           values: draft.values,
           prompt: draft.prompt,
+          promptMode: draft.promptMode,
+          manualPrompt: draft.manualPrompt,
+          aspectRatio: draft.aspectRatio,
+          generatedImage: draft.generatedImage,
           updatedAt: new Date().toISOString(),
         };
         const others = prev.drafts.filter((d) => d.id !== id);
@@ -99,6 +124,16 @@ export function useUserLibrary() {
     }));
   }, []);
 
+  const getDraft = useCallback(
+    (draftId: string) => state.drafts.find((draft) => draft.id === draftId),
+    [state.drafts],
+  );
+
+  const listDraftsForTemplate = useCallback(
+    (templateId: string) => state.drafts.filter((draft) => draft.templateId === templateId),
+    [state.drafts],
+  );
+
   const clearRecent = useCallback(() => {
     setState((prev) => ({ ...prev, recent: [] }));
   }, []);
@@ -111,6 +146,8 @@ export function useUserLibrary() {
     toggleFavorite,
     addRecent,
     saveDraft,
+    getDraft,
+    listDraftsForTemplate,
     deleteDraft,
     clearRecent,
   };

@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, desc, eq, or } from 'drizzle-orm';
+import { and, desc, eq, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   modelCapabilitySchema,
@@ -15,6 +15,7 @@ import {
   providerTextTestProblemResponse,
 } from '../lib/provider-text-test.js';
 import { fail, ok } from '../lib/response.js';
+import { normalizeProviderBaseUrl, providerIdentity } from '../lib/provider-identity.js';
 
 const providerInput = z.object({
   name: z.string().trim().min(1).max(120),
@@ -72,13 +73,46 @@ providerRoutes.get('/', async (c) => {
   return ok(c, rows.map(safeProvider));
 });
 
+providerRoutes.get('/:providerId/models', async (c) => {
+  const [provider] = await getDb().select().from(providers)
+    .where(eq(providers.id, c.req.param('providerId'))).limit(1);
+  if (!provider) return fail(c, 'NOT_FOUND', 'Provider not found', 404);
+  if (!['openai', 'openai_compatible', 'deepseek'].includes(provider.adapterType)) {
+    return fail(c, 'MODEL_DISCOVERY_UNSUPPORTED', '该 Provider 不支持自动拉取模型，请手动输入 Model ID', 422);
+  }
+  const key = provider.apiKeyEnv ? process.env[provider.apiKeyEnv] : undefined;
+  if (!key) return fail(c, 'PROVIDER_KEY_NOT_CONFIGURED', 'Provider 的密钥环境变量未配置', 409);
+  const headers: Record<string, string> = provider.authStyle === 'header'
+    ? { 'X-API-Key': key }
+    : { Authorization: `Bearer ${key}` };
+  try {
+    const response = await fetch(`${normalizeProviderBaseUrl(provider.baseUrl)}/models`, {
+      headers: { ...headers, Accept: 'application/json' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) return fail(c, 'MODEL_DISCOVERY_FAILED', `厂商模型列表请求失败（HTTP ${response.status}）`, 502);
+    const payload = await response.json() as { data?: Array<{ id?: string; name?: string }> };
+    const models = (payload.data ?? []).filter((item) => typeof item.id === 'string' && item.id.trim()).map((item) => ({
+      id: item.id!.trim(), name: item.name?.trim() || item.id!.trim(), capabilities: ['text', 'structured_output'],
+    }));
+    return ok(c, models);
+  } catch {
+    return fail(c, 'MODEL_DISCOVERY_FAILED', '无法连接厂商模型列表接口，请检查地址和密钥，或手动输入', 502);
+  }
+});
+
 providerRoutes.post('/', async (c) => {
   const parsed = providerInput.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) {
     return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid provider', 400);
   }
+  const normalized = { ...parsed.data, baseUrl: normalizeProviderBaseUrl(parsed.data.baseUrl) };
+  const existingProviders = await getDb().select().from(providers);
+  if (existingProviders.some((item) => providerIdentity(item) === providerIdentity(normalized))) {
+    return fail(c, 'PROVIDER_ALREADY_EXISTS', '相同的适配器、地址、密钥环境变量和认证方式已经存在 Provider', 409);
+  }
   const [row] = await getDb().insert(providers).values({
-    ...parsed.data,
+    ...normalized,
     kind: 'llm',
     protocol: legacyProtocol(parsed.data.adapterType),
     defaultModel: '',
@@ -135,6 +169,16 @@ providerRoutes.patch('/:id', async (c) => {
     return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid provider', 400);
   }
   const providerId = c.req.param('id');
+  if (parsed.data.baseUrl || parsed.data.adapterType || parsed.data.apiKeyEnv !== undefined || parsed.data.authStyle) {
+    const [current] = await getDb().select().from(providers).where(eq(providers.id, providerId)).limit(1);
+    if (current) {
+      const candidate = { ...current, ...parsed.data, baseUrl: normalizeProviderBaseUrl(parsed.data.baseUrl ?? current.baseUrl) };
+      const peers = await getDb().select().from(providers).where(sql`${providers.id} <> ${providerId}`);
+      if (peers.some((item) => providerIdentity(item) === providerIdentity(candidate))) {
+        return fail(c, 'PROVIDER_ALREADY_EXISTS', '相同的 Provider 连接参数已经存在', 409);
+      }
+    }
+  }
   if (parsed.data.enabled === false && await providerHasDefaultModel(providerId)) {
     return fail(c, 'DEFAULT_PROVIDER_DISABLE_FORBIDDEN', 'Reassign default roles before disabling this provider', 409);
   }
@@ -152,6 +196,7 @@ providerRoutes.patch('/:id', async (c) => {
   }
   const values = {
     ...parsed.data,
+    ...(parsed.data.baseUrl ? { baseUrl: normalizeProviderBaseUrl(parsed.data.baseUrl) } : {}),
     ...(parsed.data.adapterType
       ? { protocol: legacyProtocol(parsed.data.adapterType) }
       : {}),
@@ -169,15 +214,12 @@ providerRoutes.delete('/:id', async (c) => {
   if (await providerHasDefaultModel(providerId)) {
     return fail(c, 'DEFAULT_PROVIDER_DELETE_FORBIDDEN', 'Reassign default roles before deleting this provider', 409);
   }
-  try {
-    const [row] = await getDb().delete(providers)
-      .where(eq(providers.id, providerId))
-      .returning();
-    return row ? ok(c, { ok: true }) : fail(c, 'NOT_FOUND', 'Provider not found', 404);
-  } catch (error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23503') {
-      return fail(c, 'PROVIDER_IN_USE', 'Provider is referenced by generation jobs', 409);
-    }
-    throw error;
-  }
+  const [existing] = await getDb().select({ id: providers.id }).from(providers)
+    .where(eq(providers.id, providerId)).limit(1);
+  if (!existing) return fail(c, 'NOT_FOUND', 'Provider not found', 404);
+  await getDb().transaction(async (tx) => {
+    await tx.update(generationJobs).set({ providerId: null }).where(eq(generationJobs.providerId, providerId));
+    await tx.delete(providers).where(eq(providers.id, providerId));
+  });
+  return ok(c, { ok: true });
 });

@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from 'react';
 
-export type ToastType = 'success' | 'info' | 'error';
+export type ToastType = 'success' | 'info' | 'warning' | 'error';
 
 interface ToastItem {
   id: number;
@@ -27,17 +27,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const toast = useCallback((message: string, type: ToastType = 'success') => {
     const id = ++toastId;
-    setItems((prev) => [...prev, { id, message, type }]);
+    setItems((prev) => [...prev.filter((item)=>item.message!==message), { id, message, type }].slice(-3));
     window.setTimeout(() => {
       setItems((prev) => prev.filter((t) => t.id !== id));
-    }, 2600);
+    }, type==='success'?3000:type==='info'?4000:type==='warning'?6000:8000);
   }, []);
 
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
       <div
-        className="pointer-events-none fixed bottom-6 left-1/2 z-[100] flex w-full max-w-sm -translate-x-1/2 flex-col gap-2 px-4"
+        className="pointer-events-none fixed bottom-6 left-1/2 z-[100] flex w-full max-w-sm -translate-x-1/2 flex-col gap-2 px-4 md:left-auto md:right-6 md:translate-x-0 md:px-0"
         aria-live="polite"
       >
         {items.map((item) => (
@@ -46,6 +46,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             className={`pointer-events-auto animate-toast-in rounded-[6px] border px-4 py-3 text-sm shadow-lg backdrop-blur-sm ${
               item.type === 'error'
                 ? 'border-red-200 bg-red-50/95 text-red-800'
+                : item.type === 'warning' ? 'border-amber-200 bg-amber-50/95 text-amber-800'
                 : item.type === 'info'
                   ? 'border-gray-200 bg-white/95 text-gray-700'
                   : 'border-primary/40 bg-primary/20 text-foreground'

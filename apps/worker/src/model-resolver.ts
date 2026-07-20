@@ -41,6 +41,25 @@ async function byModelId(modelId: string) {
   return row ? parseResolved(row) : null;
 }
 
+export async function resolveVisionModel(modelId: string | null) {
+  const resolved = modelId ? await byModelId(modelId) : await byDefaultRole('vision');
+  if (!resolved) throw new Error(modelId
+    ? `Enabled vision model ${modelId} was not found`
+    : 'No enabled default vision model is configured');
+  if (!resolved.model.capabilities.includes('text') || !resolved.model.capabilities.includes('vision')) {
+    throw new Error(`Model ${resolved.model.name} lacks text or vision capability`);
+  }
+  return resolved;
+}
+
+export async function resolveImageReverseModels({ structureModelId, structureProviderId, visionModelId }: { structureModelId: string | null; structureProviderId: string | null; visionModelId: string | null }) {
+  const [structure, vision] = await Promise.all([
+    resolvePrimaryModel('image_reverse', structureModelId, structureProviderId),
+    resolveVisionModel(visionModelId),
+  ]);
+  return { structure, vision };
+}
+
 async function byLegacyProviderId(providerId: string, jobType: JobType) {
   const rows = await db.select({ provider: providers, model: providerModels })
     .from(providerModels)

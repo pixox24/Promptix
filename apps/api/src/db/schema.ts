@@ -1,5 +1,6 @@
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -43,6 +44,7 @@ export const promptTemplates = pgTable(
     coverUrl: text('cover_url'),
     status: text('status').notNull().default('draft'),
     isFeatured: boolean('is_featured').notNull().default(false),
+    featuredOrder: integer('featured_order').notNull().default(0),
     isHot: boolean('is_hot').notNull().default(false),
     favoriteCount: integer('favorite_count').notNull().default(0),
     useCount: integer('use_count').notNull().default(0),
@@ -67,6 +69,13 @@ export const promptTemplates = pgTable(
       t.createdAt,
     ),
     index('prompt_templates_tags_gin_idx').using('gin', t.tags),
+    index('prompt_templates_featured_rank_idx').on(
+      t.status,
+      t.isFeatured,
+      t.featuredOrder,
+      t.useCount,
+      t.createdAt,
+    ),
   ],
 );
 
@@ -149,6 +158,27 @@ export const providerModels = pgTable(
   ],
 );
 
+export const ingestSystemPrompts = pgTable(
+  'ingest_system_prompts',
+  {
+    flowType: text('flow_type').primaryKey(),
+    prompt: text('prompt').notNull(),
+    updatedBy: uuid('updated_by').references(() => adminUsers.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check(
+      'ingest_system_prompts_flow_type_check',
+      sql`${t.flowType} in ('text_expand', 'image_reverse')`,
+    ),
+    check(
+      'ingest_system_prompts_prompt_length_check',
+      sql`char_length(btrim(${t.prompt})) between 1 and 20000`,
+    ),
+  ],
+);
+
 export const generationJobs = pgTable(
   'generation_jobs',
   {
@@ -159,20 +189,30 @@ export const generationJobs = pgTable(
     actorId: uuid('actor_id'),
     providerId: uuid('provider_id').references(() => providers.id),
     modelId: uuid('model_id').references(() => providerModels.id),
+    visionModelId: uuid('vision_model_id').references(() => providerModels.id),
     queueName: text('queue_name'),
     bullJobId: text('bull_job_id'),
     attempts: integer('attempts').notNull().default(0),
     input: jsonb('input').notNull().default({}),
     output: jsonb('output'),
     templateId: text('template_id').references(() => promptTemplates.id),
+    ownerKeyHash: text('owner_key_hash'),
+    usageRecordedAt: timestamp('usage_recorded_at', { withTimezone: true }),
     errorMessage: text('error_message'),
+    errorCode: text('error_code'),
+    errorDetails: jsonb('error_details'),
+    progress: jsonb('progress'),
+    resultMeta: jsonb('result_meta'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
     startedAt: timestamp('started_at', { withTimezone: true }),
     finishedAt: timestamp('finished_at', { withTimezone: true }),
   },
-  (t) => [index('generation_jobs_status_created_idx').on(t.status, t.createdAt)],
+  (t) => [
+    index('generation_jobs_status_created_idx').on(t.status, t.createdAt),
+    index('generation_jobs_owner_status_idx').on(t.ownerKeyHash, t.status),
+  ],
 );
 
 export const mediaObjects = pgTable(

@@ -44,7 +44,7 @@ async function main() {
     templates: Array<{
       id:string; name:string; summary:string; description:string; coverImage:string;
       category:string; tags:string[]; variables:unknown[]; promptTemplate:string;
-      scenarios:string[]; isFeatured?:boolean; isHot?:boolean;
+      scenarios:string[]; isFeatured?:boolean; featuredOrder?:number; isHot?:boolean;
       favoriteCount:number; useCount:number; createdAt:string;
     }>;
   };
@@ -53,13 +53,13 @@ async function main() {
       id:template.id,name:template.name,summary:template.summary,description:template.description,
       coverObjectKey:`external/${template.id}`,coverUrl:template.coverImage,category:template.category,
       tags:template.tags,variables:template.variables,promptTemplate:template.promptTemplate,
-      scenarios:template.scenarios,isFeatured:template.isFeatured??false,isHot:template.isHot??false,
+      scenarios:template.scenarios,isFeatured:template.isFeatured??false,featuredOrder:template.featuredOrder??0,isHot:template.isHot??false,
       favoriteCount:template.favoriteCount,useCount:template.useCount,status:'published',source:'manual',
       publishedAt:new Date(template.createdAt),createdBy:existing?.id,
     }).onConflictDoUpdate({target:promptTemplates.id,set:{
       name:template.name,summary:template.summary,description:template.description,coverUrl:template.coverImage,
       category:template.category,tags:template.tags,variables:template.variables,promptTemplate:template.promptTemplate,
-      scenarios:template.scenarios,isFeatured:template.isFeatured??false,isHot:template.isHot??false,
+      scenarios:template.scenarios,isFeatured:template.isFeatured??false,featuredOrder:template.featuredOrder??0,isHot:template.isHot??false,
       favoriteCount:template.favoriteCount,useCount:template.useCount,updatedAt:new Date(),
     }});
   }

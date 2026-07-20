@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, count, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   modelCapabilitySchema,
@@ -13,6 +13,7 @@ import { generationJobs, providerModels, providers } from '../db/schema.js';
 import { requireAdmin, type AdminVars } from '../lib/auth.js';
 import { fail, ok } from '../lib/response.js';
 import { hasDefaultRole, modelIdentityChangeError } from '../lib/model-policy.js';
+import { normalizeModelId } from '../lib/provider-identity.js';
 
 const modelPatchSchema = z.object({
   providerId: z.string().uuid().optional(),
@@ -93,6 +94,9 @@ modelRoutes.post('/', async (c) => {
   if (hasDefaultRole(parsed.data) && !provider.enabled) {
     return fail(c, 'DEFAULT_PROVIDER_DISABLED', 'Enable the provider before assigning a default role', 409);
   }
+  const sameModel = await getDb().select({ id: providerModels.id }).from(providerModels)
+    .where(and(eq(providerModels.providerId, parsed.data.providerId), sql`lower(trim(${providerModels.modelId})) = ${normalizeModelId(parsed.data.modelId)}`)).limit(1);
+  if (sameModel.length) return fail(c, 'MODEL_ALREADY_EXISTS', '该 Provider 已存在相同的 Model ID（名称不同也不能重复添加）', 409);
   try {
     const row = await getDb().transaction(async (tx) => {
       if (parsed.data.isDefaultText) {
@@ -152,6 +156,9 @@ modelRoutes.patch('/:id', async (c) => {
   if (hasDefaultRole(merged.data) && !provider.enabled) {
     return fail(c, 'DEFAULT_PROVIDER_DISABLED', 'Enable the provider before assigning a default role', 409);
   }
+  const duplicate = await getDb().select({ id: providerModels.id }).from(providerModels)
+    .where(and(eq(providerModels.providerId, merged.data.providerId), sql`${providerModels.id} <> ${existing.id}`, sql`lower(trim(${providerModels.modelId})) = ${normalizeModelId(merged.data.modelId)}`)).limit(1);
+  if (duplicate.length) return fail(c, 'MODEL_ALREADY_EXISTS', '该 Provider 已存在相同的 Model ID（名称不同也不能重复添加）', 409);
 
   try {
     const row = await getDb().transaction(async (tx) => {
@@ -190,11 +197,9 @@ modelRoutes.delete('/:id', async (c) => {
   if (existing.isDefaultText || existing.isDefaultVision || existing.isDefaultImage) {
     return fail(c, 'DEFAULT_MODEL_DELETE_FORBIDDEN', 'Reassign default roles before deleting this model', 409);
   }
-  const [{ value }] = await getDb().select({ value: count() }).from(generationJobs)
-    .where(eq(generationJobs.modelId, existing.id));
-  if (value > 0) {
-    return fail(c, 'MODEL_IN_USE', 'Model is referenced by generation jobs; disable it instead', 409);
-  }
-  await getDb().delete(providerModels).where(eq(providerModels.id, existing.id));
+  await getDb().transaction(async (tx) => {
+    await tx.update(generationJobs).set({ modelId: null }).where(eq(generationJobs.modelId, existing.id));
+    await tx.delete(providerModels).where(eq(providerModels.id, existing.id));
+  });
   return ok(c, { ok: true });
 });

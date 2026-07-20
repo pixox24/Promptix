@@ -39,12 +39,13 @@ export async function generateAsyncImage(config: ResolvedModel, input: JsonRecor
   if (defaults.async.maxQueueSeconds !== undefined) {
     headers['X-Async-Image-Max-Queue-Sec'] = String(defaults.async.maxQueueSeconds);
   }
+  const ratioSizes:Record<string,string>={ '1:1':'1024x1024','3:4':'768x1024','4:5':'819x1024','9:16':'576x1024','16:9':'1024x576' };
   const body = {
     model: config.model.modelId,
     prompt,
     size: typeof input.size === 'string'
       ? input.size
-      : defaults.image.size ?? '1024x1024',
+      : typeof input.aspectRatio==='string' ? ratioSizes[input.aspectRatio]??defaults.image.size??'1024x1024' : defaults.image.size ?? '1024x1024',
     n: typeof input.n === 'number' ? input.n : defaults.image.n ?? 1,
     ...(defaults.async.quality ? { quality: defaults.async.quality } : {}),
     ...(defaults.async.responseFormat

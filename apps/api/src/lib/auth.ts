@@ -41,14 +41,14 @@ export async function verifyAdminToken(
   }
 }
 
-export function setAuthCookie(c: Context, token: string) {
+export function setAuthCookie(c: Context, token: string, remember = false) {
   const env = loadEnv();
   setCookie(c, AUTH_COOKIE, token, {
     httpOnly: true,
     secure: env.COOKIE_SECURE,
     sameSite: 'Lax',
     path: '/',
-    maxAge: 60 * 60 * 24 * 7,
+    ...(remember ? { maxAge: 60 * 60 * 24 * 7 } : {}),
   });
 }
 

@@ -15,6 +15,7 @@ export interface PromptVariable {
   defaultValue?: string;
   required?: boolean;
   options?: string[];
+  suggestions?: string[];
   description?: string;
 }
 
@@ -39,21 +40,31 @@ export interface PromptTemplate {
   promptTemplate: string;
   scenarios: string[];
   isFeatured?: boolean;
+  featuredOrder?: number;
   isHot?: boolean;
   favoriteCount: number;
   useCount: number;
   createdAt: string;
 }
 
-export type SortOption = 'hot' | 'latest' | 'favorites';
+export type SortOption = 'hot' | 'featured' | 'favorites' | 'latest';
 
 export interface SavedDraft {
+  version: 2;
   id: string;
   templateId: string;
   templateName: string;
   coverImage: string;
   values: Record<string, string>;
   prompt: string;
+  promptMode: 'auto' | 'manual';
+  manualPrompt?: string;
+  aspectRatio?: string;
+  generatedImage?: {
+    url: string;
+    width?: number;
+    height?: number;
+  };
   updatedAt: string;
 }
 

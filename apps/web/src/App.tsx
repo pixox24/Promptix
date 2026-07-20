@@ -7,11 +7,13 @@ import { HomePage } from './pages/HomePage';
 import { LibraryPage } from './pages/LibraryPage';
 import { MyPromptsPage } from './pages/MyPromptsPage';
 import { AdminPage } from './pages/AdminPage';
+import { ConfirmDialogProvider } from './context/ConfirmDialogContext';
 
 export default function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
+        <ConfirmDialogProvider>
         <UserLibraryProvider>
           <Routes>
             <Route path="admin/*" element={<AdminPage />} />
@@ -24,6 +26,7 @@ export default function App() {
             </Route>
           </Routes>
         </UserLibraryProvider>
+        </ConfirmDialogProvider>
       </ToastProvider>
     </BrowserRouter>
   );

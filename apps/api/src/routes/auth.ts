@@ -16,6 +16,7 @@ import { fail, ok } from '../lib/response.js';
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
+  remember: z.boolean().optional().default(false),
 });
 
 export const authRoutes = new Hono<AdminVars>();
@@ -48,7 +49,7 @@ authRoutes.post('/login', async (c) => {
     email: user.email,
     role: user.role,
   });
-  setAuthCookie(c, token);
+  setAuthCookie(c, token, parsed.data.remember);
 
   return ok(c, {
     id: user.id,

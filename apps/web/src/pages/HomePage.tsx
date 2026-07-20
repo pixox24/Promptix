@@ -9,6 +9,8 @@ import { templates as staticTemplates } from '../data/templates';
 import { fetchTemplates } from '../data/templateApi';
 import type { PromptTemplate } from '../types/prompt';
 import type { SortOption } from '../types/prompt';
+import { TEMPLATE_USE_SCENARIOS } from '@promptix/shared';
+import { compareTemplates } from '../lib/templateRanking';
 
 export function HomePage() {
   const [params, setParams] = useSearchParams();
@@ -54,6 +56,12 @@ export function HomePage() {
     update({ tags: list.length ? list.join(',') : null });
   };
 
+  const onClearScenarios = () => {
+    const scenarios = new Set<string>(TEMPLATE_USE_SCENARIOS);
+    const remaining = selectedTags.filter((tag) => !scenarios.has(tag));
+    update({ tags: remaining.length ? remaining.join(',') : null });
+  };
+
   const filtered = useMemo(() => {
     let list = [...templates];
 
@@ -80,21 +88,7 @@ export function HomePage() {
       );
     }
 
-    switch (sort) {
-      case 'latest':
-        list.sort(
-          (a, b) =>
-            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-        );
-        break;
-      case 'favorites':
-        list.sort((a, b) => b.favoriteCount - a.favoriteCount);
-        break;
-      case 'hot':
-      default:
-        list.sort((a, b) => b.useCount - a.useCount);
-        break;
-    }
+    list.sort(compareTemplates(sort));
 
     return list;
   }, [query, sort, selectedTags, templates]);
@@ -106,6 +100,7 @@ export function HomePage() {
     onSortChange: (s: SortOption) => update({ sort: s === 'hot' ? null : s }),
     selectedTags,
     onToggleTag,
+    onClearScenarios,
   };
 
   return (
