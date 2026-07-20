@@ -5,7 +5,7 @@ import { loadEnvFile, redisConnection } from './env.js';
 import { effectiveIngestJobInput } from './ingest-job-input.js';
 loadEnvFile();
 const { db, generationJobs } = await import('./db.js');
-const { generateImage, structurePrompt } = await import('./adapters.js');
+const { generateImage, structurePromptDetailed } = await import('./adapters.js');
 const { runProviderTextTest } = await import('./provider-text-test.js');
 const {
   resolvePrimaryModel,
@@ -59,6 +59,8 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<{jobId:string}>)=>{
         const pipeline = await runImageReversePipeline({
           imageUrl,
           systemPrompt: String(recordInput.systemPrompt),
+          taxonomySnapshot: recordInput.taxonomySnapshot,
+          taxonomySnapshotHash: typeof recordInput.taxonomySnapshotHash === 'string' ? recordInput.taxonomySnapshotHash : undefined,
           vision: imageReverseModels.vision,
           structure: imageReverseModels.structure,
           onProgress: async(progress) => { await db.update(generationJobs).set({progress}).where(eq(generationJobs.id,record.id)); },
@@ -66,7 +68,16 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<{jobId:string}>)=>{
         output = pipeline.draft;
         await db.update(generationJobs).set({resultMeta:pipeline.resultMeta}).where(eq(generationJobs.id,record.id));
       } else {
-        output = await structurePrompt(primary, recordInput);
+        const structured = await structurePromptDetailed(primary, recordInput);
+        output = structured.draft;
+        await db.update(generationJobs).set({ resultMeta: {
+          repaired: structured.repaired,
+          qualityIssues: [],
+          visionModelId: primary.model.id,
+          structureModelId: primary.model.id,
+          taxonomySnapshotHash: typeof recordInput.taxonomySnapshotHash === 'string' ? recordInput.taxonomySnapshotHash : undefined,
+          classificationWarnings: structured.classificationWarnings,
+        } }).where(eq(generationJobs.id, record.id));
       }
     }
     await db.update(generationJobs).set({status:'succeeded',output,finishedAt:new Date(),errorMessage:null,errorCode:null,errorDetails:null}).where(eq(generationJobs.id,record.id));

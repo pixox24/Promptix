@@ -4,6 +4,7 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   text,
   timestamp,
@@ -27,6 +28,29 @@ export const adminUsers = pgTable(
   (t) => [uniqueIndex('admin_users_email_uidx').on(t.email)],
 );
 
+export const taxonomyTerms = pgTable(
+  'taxonomy_terms',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    dimension: text('dimension').notNull(),
+    slug: text('slug').notNull(),
+    label: text('label').notNull(),
+    description: text('description').notNull().default(''),
+    aliases: text('aliases').array().notNull().default([]),
+    enabled: boolean('enabled').notNull().default(true),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdBy: uuid('created_by').references(() => adminUsers.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('taxonomy_terms_dimension_slug_uidx').on(t.dimension, t.slug),
+    index('taxonomy_terms_dimension_enabled_sort_idx').on(t.dimension, t.enabled, t.sortOrder, t.label),
+    index('taxonomy_terms_aliases_gin_idx').using('gin', t.aliases),
+    check('taxonomy_terms_dimension_check', sql`${t.dimension} in ('output_type','scenario','style','subject')`),
+  ],
+);
+
 export const promptTemplates = pgTable(
   'prompt_templates',
   {
@@ -35,8 +59,15 @@ export const promptTemplates = pgTable(
     summary: text('summary').notNull().default(''),
     description: text('description').notNull().default(''),
     category: text('category').notNull(),
+    workflowType: text('workflow_type').notNull().default('generate'),
+    outputTypeId: uuid('output_type_id').references(() => taxonomyTerms.id),
     tags: text('tags').array().notNull().default([]),
     scenarios: text('scenarios').array().notNull().default([]),
+    taxonomyReviewStatus: text('taxonomy_review_status').notNull().default('pending'),
+    unmappedTerms: jsonb('unmapped_terms').notNull().default([]),
+    classificationMeta: jsonb('classification_meta'),
+    taxonomyReviewedAt: timestamp('taxonomy_reviewed_at', { withTimezone: true }),
+    taxonomyReviewedBy: uuid('taxonomy_reviewed_by').references(() => adminUsers.id),
     variables: jsonb('variables').notNull().default([]),
     promptTemplate: text('prompt_template').notNull(),
     negativePrompt: text('negative_prompt'),
@@ -68,6 +99,11 @@ export const promptTemplates = pgTable(
       t.category,
       t.createdAt,
     ),
+    index('prompt_templates_status_output_type_created_idx').on(
+      t.status,
+      t.outputTypeId,
+      t.createdAt,
+    ),
     index('prompt_templates_tags_gin_idx').using('gin', t.tags),
     index('prompt_templates_featured_rank_idx').on(
       t.status,
@@ -76,6 +112,26 @@ export const promptTemplates = pgTable(
       t.useCount,
       t.createdAt,
     ),
+    check('prompt_templates_workflow_type_check', sql`${t.workflowType} in ('generate','edit')`),
+    check('prompt_templates_taxonomy_review_status_check', sql`${t.taxonomyReviewStatus} in ('pending','needs_attention','reviewed')`),
+  ],
+);
+
+export const templateTaxonomyAssignments = pgTable(
+  'template_taxonomy_assignments',
+  {
+    templateId: text('template_id').notNull().references(() => promptTemplates.id, { onDelete: 'cascade' }),
+    termId: uuid('term_id').notNull().references(() => taxonomyTerms.id),
+    source: text('source').notNull().default('admin'),
+    confidence: numeric('confidence', { precision: 4, scale: 3 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('template_taxonomy_assignments_template_term_uidx').on(t.templateId, t.termId),
+    index('template_taxonomy_assignments_term_template_idx').on(t.termId, t.templateId),
+    check('template_taxonomy_assignments_source_check', sql`${t.source} in ('ai','admin','migration')`),
+    check('template_taxonomy_assignments_confidence_check', sql`${t.confidence} is null or (${t.confidence} >= 0 and ${t.confidence} <= 1)`),
   ],
 );
 

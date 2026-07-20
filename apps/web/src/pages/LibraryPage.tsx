@@ -1,138 +1,34 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import {
-  FilterSidebar,
-  MobileFilterBar,
-} from '../components/browse/FilterSidebar';
+import { useState } from 'react';
+import { FilterSidebar, MobileFilterBar } from '../components/browse/FilterSidebar';
 import { TemplateGrid } from '../components/template/TemplateGrid';
-import { templates as staticTemplates } from '../data/templates';
-import { fetchTemplates } from '../data/templateApi';
-import type { PromptTemplate } from '../types/prompt';
-import type { SortOption, TemplateCategory } from '../types/prompt';
-import { categoryLabelMap } from '../data/categories';
-import { TEMPLATE_USE_SCENARIOS } from '@promptix/shared';
-import { compareTemplates } from '../lib/templateRanking';
+import { useTemplateBrowse } from '../hooks/useTemplateBrowse';
 
 export function LibraryPage() {
-  const [params, setParams] = useSearchParams();
-  const [loading, setLoading] = useState(true);
+  const browse = useTemplateBrowse();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
-
-  const query = params.get('q') ?? '';
-  const sort = (params.get('sort') as SortOption) || 'hot';
-  const category = (params.get('category') as TemplateCategory | 'all') || 'all';
-  const tagsParam = params.get('tags') ?? '';
-  const selectedTags = useMemo(() => tagsParam ? tagsParam.split(',').filter(Boolean) : [], [tagsParam]);
-
-  useEffect(() => {
-    setLoading(true);
-    let active = true;
-    fetchTemplates().then((items) => { if (active) setTemplates(items); })
-      .catch(() => { if (active) setTemplates(staticTemplates); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, []);
-
-  useEffect(() => {
-    if (!templates.length) return;
-    setLoading(true);
-    const t = window.setTimeout(() => setLoading(false), 120);
-    return () => window.clearTimeout(t);
-  }, [query, sort, tagsParam, category, templates.length]);
-
-  const update = (patch: Record<string, string | null>) => {
-    const next = new URLSearchParams(params);
-    Object.entries(patch).forEach(([key, value]) => {
-      if (!value || value === 'all') next.delete(key);
-      else next.set(key, value);
-    });
-    setParams(next, { replace: true });
-  };
-
-  const onToggleTag = (tag: string) => {
-    const set = new Set(selectedTags);
-    if (set.has(tag)) set.delete(tag);
-    else set.add(tag);
-    const list = Array.from(set);
-    update({ tags: list.length ? list.join(',') : null });
-  };
-
-  const onClearScenarios = () => {
-    const scenarios = new Set<string>(TEMPLATE_USE_SCENARIOS);
-    const remaining = selectedTags.filter((tag) => !scenarios.has(tag));
-    update({ tags: remaining.length ? remaining.join(',') : null });
-  };
-
-  const filtered = useMemo(() => {
-    let list = [...templates];
-
-    if (category && category !== 'all') {
-      list = list.filter((t) => t.category === category);
-    }
-
-    if (query.trim()) {
-      const kw = query.trim().toLowerCase();
-      list = list.filter(
-        (t) =>
-          t.name.toLowerCase().includes(kw) ||
-          t.summary.toLowerCase().includes(kw) ||
-          t.tags.some((x) => x.toLowerCase().includes(kw)),
-      );
-    }
-
-    if (selectedTags.length) {
-      list = list.filter((t) =>
-        selectedTags.some(
-          (tag) => t.tags.includes(tag) || t.scenarios.includes(tag),
-        ),
-      );
-    }
-
-    list.sort(compareTemplates(sort));
-
-    return list;
-  }, [query, sort, selectedTags, category, templates]);
-
   const sidebarProps = {
-    query,
-    onQueryChange: (q: string) => update({ q: q || null }),
-    sort,
-    onSortChange: (s: SortOption) => update({ sort: s === 'hot' ? null : s }),
-    selectedTags,
-    onToggleTag,
-    onClearScenarios,
+    query: browse.query,
+    onQueryChange: (q: string) => browse.update({ q: q || null }),
+    sort: browse.sort,
+    onSortChange: (sort: typeof browse.sort) => browse.update({ sort: sort === (browse.query ? 'relevance' : 'hot') ? null : sort }),
+    taxonomyTerms: browse.taxonomyTerms,
+    outputType: browse.outputType,
+    onOutputTypeChange: (value: string) => browse.update({ outputType: value || null }),
+    scenarios: browse.scenarios,
+    styles: browse.styles,
+    subjects: browse.subjects,
+    onToggleTaxonomy: browse.toggle,
+    onClearTaxonomy: (dimension: 'scenarios' | 'styles' | 'subjects') => browse.update({ [dimension]: null }),
   };
-
-  return (
-    <div className="mx-auto max-w-[1920px] px-4 pb-12 md:px-8">
-      {category !== 'all' && (
-        <div className="mb-4 flex items-center gap-2 text-sm text-muted-foreground">
-          <span>分类</span>
-          <span className="rounded-md bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground">
-            {categoryLabelMap[category as TemplateCategory] ?? category}
-          </span>
-          <button
-            type="button"
-            className="text-xs underline"
-            onClick={() => update({ category: null })}
-          >
-            清除
-          </button>
-        </div>
-      )}
-
-      <div className="flex flex-col items-start gap-6 md:flex-row md:gap-5">
-        <MobileFilterBar
-          {...sidebarProps}
-          open={mobileOpen}
-          onOpenChange={setMobileOpen}
-        />
-        <FilterSidebar {...sidebarProps} />
-        <div className="min-w-0 flex-1">
-          <TemplateGrid templates={filtered} loading={loading} />
-        </div>
+  return <div className="mx-auto max-w-[1920px] px-4 pb-12 md:px-8">
+    <div className="flex flex-col items-start gap-6 md:flex-row md:gap-5">
+      <MobileFilterBar {...sidebarProps} open={mobileOpen} onOpenChange={setMobileOpen} />
+      <FilterSidebar {...sidebarProps} />
+      <div className="min-w-0 flex-1">
+        {browse.error && <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{browse.error}</div>}
+        <TemplateGrid templates={browse.templates} loading={browse.loading} />
+        {browse.total > 24 && <div className="mt-6 flex items-center justify-center gap-3"><button className="rounded-lg border px-4 py-2 text-sm disabled:opacity-40" disabled={browse.page <= 1} onClick={() => browse.update({ page: String(browse.page - 1) })}>上一页</button><span className="text-sm text-slate-500">第 {browse.page} 页</span><button className="rounded-lg border px-4 py-2 text-sm disabled:opacity-40" disabled={browse.page * 24 >= browse.total} onClick={() => browse.update({ page: String(browse.page + 1) })}>下一页</button></div>}
       </div>
     </div>
-  );
+  </div>;
 }

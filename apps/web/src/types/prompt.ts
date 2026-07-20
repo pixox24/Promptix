@@ -1,4 +1,6 @@
 /** 提示词变量类型 */
+import type { SemanticClassification } from '@promptix/shared';
+
 export type VariableType =
   | 'text'
   | 'select'
@@ -39,6 +41,8 @@ export interface PromptTemplate {
   /** 含 {{variableKey}} 占位符的提示词骨架 */
   promptTemplate: string;
   scenarios: string[];
+  semantic?: SemanticClassification;
+  outputTypeLabel?: string;
   isFeatured?: boolean;
   featuredOrder?: number;
   isHot?: boolean;
@@ -47,7 +51,7 @@ export interface PromptTemplate {
   createdAt: string;
 }
 
-export type SortOption = 'hot' | 'featured' | 'favorites' | 'latest';
+export type SortOption = 'relevance' | 'hot' | 'featured' | 'favorites' | 'latest';
 
 export interface SavedDraft {
   version: 2;

@@ -16,6 +16,7 @@ import { enqueueGenerationJob, retryEnqueueOptions } from '../lib/job-enqueue.js
 import { deleteObject, putObject, storageKind } from '../lib/storage.js';
 import { effectiveIngestSystemPrompt, loadIngestSystemPrompt } from '../lib/ingest-system-prompts.js';
 import { buildTemplateCoverRequest } from '../lib/template-cover.js';
+import { loadActiveTaxonomySnapshot } from '../lib/taxonomy.js';
 import {
   clearTerminalQueueJobForRetry,
   QueueJobStillRunningError,
@@ -189,6 +190,7 @@ jobRoutes.post('/',async(c)=>{
   if (ingestFlow.success) {
     try {
       const configured = await loadIngestSystemPrompt(ingestFlow.data);
+      const taxonomy = await loadActiveTaxonomySnapshot();
       resolvedInput = {
         ...parsed.data.input,
         systemPrompt: effectiveIngestSystemPrompt(
@@ -196,6 +198,8 @@ jobRoutes.post('/',async(c)=>{
           parsed.data.input.systemPrompt,
           configured,
         ),
+        taxonomySnapshot: taxonomy.snapshot,
+        taxonomySnapshotHash: taxonomy.hash,
       };
     } catch (error) {
       return fail(c, 'INVALID_SYSTEM_PROMPT', error instanceof Error ? error.message : 'Invalid system prompt', 400);
@@ -232,9 +236,11 @@ jobRoutes.post('/image-reverse',async(c)=>{
     return modelValidationFailure(c, error);
   }
   let systemPrompt: string;
+  let taxonomy: Awaited<ReturnType<typeof loadActiveTaxonomySnapshot>>;
   try {
     const configured = await loadIngestSystemPrompt('image_reverse');
     systemPrompt = effectiveIngestSystemPrompt('image_reverse', body.systemPrompt, configured);
+    taxonomy = await loadActiveTaxonomySnapshot();
   } catch (error) {
     return fail(c, 'INVALID_SYSTEM_PROMPT', error instanceof Error ? error.message : 'Invalid system prompt', 400);
   }
@@ -246,12 +252,12 @@ jobRoutes.post('/image-reverse',async(c)=>{
     providerId: selection.providerId,
     visionModelId: visionSelection.modelId,
     progress:{stage:'queued',percent:0,message:'等待处理',updatedAt:new Date().toISOString()},
-    input:{ systemPrompt },
+    input:{ systemPrompt, taxonomySnapshot: taxonomy.snapshot, taxonomySnapshotHash: taxonomy.hash },
   }).returning();
   const ext=file.type.split('/')[1]?.replace('jpeg','jpg')??'bin'; const key=`temp/inputs/${row.id}/source.${ext}`;
   const stored=await putObject(key,Buffer.from(await file.arrayBuffer()),file.type);
   await db.insert(mediaObjects).values({objectKey:key,bucket:storageKind(),url:stored.url,storageClass:'temp',prefixKind:'input',expiresAt:new Date(Date.now()+7*86400000),jobId:row.id,mime:file.type,bytes:file.size});
-  await db.update(generationJobs).set({input:{imageUrl:stored.url,objectKey:key,systemPrompt}}).where(eq(generationJobs.id,row.id));
+  await db.update(generationJobs).set({input:{imageUrl:stored.url,objectKey:key,systemPrompt,taxonomySnapshot:taxonomy.snapshot,taxonomySnapshotHash:taxonomy.hash}}).where(eq(generationJobs.id,row.id));
   try{await enqueueGenerationJob(row.id);}catch(e){await db.update(generationJobs).set({status:'failed',errorMessage:e instanceof Error?e.message:'Queue unavailable',finishedAt:new Date()}).where(eq(generationJobs.id,row.id));return fail(c,'QUEUE_UNAVAILABLE','Redis queue is unavailable',503);}
   return ok(c,{jobId:row.id,status:'queued'},202);
 });

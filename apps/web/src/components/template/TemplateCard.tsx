@@ -56,6 +56,7 @@ export function TemplateCard({ template }: TemplateCardProps) {
             />
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 via-black/40 to-transparent" />
             <div className="absolute bottom-0 left-0 right-0 z-10 p-4">
+              {template.outputTypeLabel && <div className="mb-2 text-center"><span className="rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-semibold text-slate-700 shadow-sm">{template.outputTypeLabel}</span></div>}
               <h3 className="line-clamp-1 text-center text-base font-bold leading-snug text-white drop-shadow-md">
                 {template.name}
               </h3>

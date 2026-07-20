@@ -40,8 +40,8 @@ test('renders scenarios as wrapping toggle tags instead of checkboxes', async ()
   );
 
   assert.match(source, /className="flex flex-wrap gap-2"/);
-  assert.match(source, /aria-pressed=\{selected\}/);
-  assert.doesNotMatch(source.match(/function ScenarioTags[\s\S]*?\n}\n/)?.[0] ?? '', /type="checkbox"/);
+  assert.match(source, /aria-pressed=\{active\}/);
+  assert.doesNotMatch(source.match(/function TermTags[\s\S]*?\n}\n/)?.[0] ?? '', /type="checkbox"/);
   assert.match(source, />\s*清除\s*<\/button>/);
 });
 

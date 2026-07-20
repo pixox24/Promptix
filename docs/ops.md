@@ -101,6 +101,23 @@ FROM provider_models;
 
 发布后如需快速回滚，先停止新 API/Worker，再部署旧版本代码。由于迁移保留了旧 Provider 字段和 `generation_jobs.provider_id`，旧代码可继续读取兼容数据；不要为了应用回滚删除 `provider_models` 或 `model_id`。只有灾难恢复时才创建空库并用升级前的 `pg_dump` 通过 `pg_restore` 恢复。
 
+### 模板分类词库与发布门禁
+
+`/admin/taxonomy` 维护产物类型、使用场景、视觉风格和画面主体。slug 是稳定标识，创建后不可修改；已被引用的词只能停用，不要直接从数据库删除。停用项仍可用于展示历史模板，但新草稿不能选择，包含停用项的模板不能重新发布。
+
+提示词优化和图片反推任务在创建时会把启用词库及其哈希写入任务快照，重试仍使用原快照。AI 产生的未知概念进入待处理词，管理员必须映射、转为自由标签或忽略；新模板始终保存为草稿，只有完整分类、人工确认且有封面时才可发布。
+
+执行 `0009` 分类迁移前先备份数据库。迁移后检查：
+
+```sql
+SELECT dimension, count(*) FROM taxonomy_terms GROUP BY dimension ORDER BY dimension;
+SELECT count(*) FROM prompt_templates WHERE output_type_id IS NULL;
+SELECT taxonomy_review_status, count(*) FROM prompt_templates GROUP BY taxonomy_review_status;
+SELECT count(*) FROM template_taxonomy_assignments;
+```
+
+初始词库应为 `output_type=7`、`scenario=14`、`style=12`、`subject=12`。第二条查询中的记录需要人工处理；不要为了通过检查将其批量静默归入“通用视觉”。应用回滚时保留新增表和列，旧代码继续读取双写的 `category/scenarios/tags` 兼容字段。
+
 ## 安全基线
 
 - `.env` 不进入版本库；Provider 只保存密钥的环境变量名。

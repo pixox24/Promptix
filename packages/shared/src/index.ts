@@ -194,6 +194,53 @@ export const templateCategorySchema = z.enum([
 ]);
 export type TemplateCategory = z.infer<typeof templateCategorySchema>;
 
+export const workflowTypeSchema = z.enum(['generate', 'edit']);
+export type WorkflowType = z.infer<typeof workflowTypeSchema>;
+
+export const taxonomyDimensionSchema = z.enum([
+  'output_type',
+  'scenario',
+  'style',
+  'subject',
+]);
+export type TaxonomyDimension = z.infer<typeof taxonomyDimensionSchema>;
+
+export const taxonomySlugSchema = z.string().trim().min(1).max(80)
+  .regex(/^[a-z0-9]+(?:_[a-z0-9]+)*$/);
+
+export const unmappedTermSchema = z.object({
+  dimension: taxonomyDimensionSchema,
+  label: z.string().trim().min(1).max(80),
+  reason: z.string().trim().min(1).max(300),
+  confidence: z.number().min(0).max(1).optional(),
+});
+export type UnmappedTerm = z.infer<typeof unmappedTermSchema>;
+
+const uniqueTaxonomySlugs = z.array(taxonomySlugSchema).max(12)
+  .refine((values) => new Set(values).size === values.length, 'Taxonomy values must be unique');
+
+const freeTagsSchema = z.array(z.string().trim().min(1).max(40)).max(20)
+  .refine((values) => new Set(values).size === values.length, 'Tags must be unique');
+
+export const classificationConfidenceSchema = z.object({
+  outputType: z.number().min(0).max(1).optional(),
+  scenarios: z.number().min(0).max(1).optional(),
+  styles: z.number().min(0).max(1).optional(),
+  subjects: z.number().min(0).max(1).optional(),
+}).default({});
+
+export const semanticClassificationSchema = z.object({
+  workflowType: workflowTypeSchema,
+  outputType: taxonomySlugSchema.nullable(),
+  scenarios: uniqueTaxonomySlugs.default([]),
+  styles: uniqueTaxonomySlugs.default([]),
+  subjects: uniqueTaxonomySlugs.default([]),
+  tags: freeTagsSchema.default([]),
+  unmappedTerms: z.array(unmappedTermSchema).max(20).default([]),
+  confidence: classificationConfidenceSchema,
+});
+export type SemanticClassification = z.infer<typeof semanticClassificationSchema>;
+
 /** Canonical use scenarios shared by template data, API filters, and clients. */
 export const TEMPLATE_USE_SCENARIOS = [
   '电商商品图',
@@ -221,8 +268,8 @@ export const templateSourceSchema = z.enum([
 ]);
 export type TemplateSource = z.infer<typeof templateSourceSchema>;
 
-/** LLM structured draft before save */
-export const templateDraftObjectSchema = z.object({
+/** Legacy draft contract, used only for reading jobs created before semantic taxonomy. */
+export const legacyTemplateDraftSchema = z.object({
   name: z.string().min(1),
   summary: z.string().min(1),
   description: z.string().min(1),
@@ -233,8 +280,20 @@ export const templateDraftObjectSchema = z.object({
   promptTemplate: z.string().min(1),
   negativePrompt: z.string().optional(),
 });
+
+/** LLM structured draft before save. New ingest jobs must use this contract. */
+export const templateDraftObjectSchema = z.object({
+  name: z.string().min(1),
+  summary: z.string().min(1),
+  description: z.string().min(1),
+  semantic: semanticClassificationSchema,
+  variables: z.array(promptVariableSchema).min(1).max(12),
+  promptTemplate: z.string().min(1),
+  negativePrompt: z.string().optional(),
+});
 export const templateDraftSchema = templateDraftObjectSchema;
 export type TemplateDraft = z.infer<typeof templateDraftSchema>;
+export type LegacyTemplateDraft = z.infer<typeof legacyTemplateDraftSchema>;
 
 export const ingestFlowTypeSchema = z.enum(['text_expand', 'image_reverse']);
 export type IngestFlowType = z.infer<typeof ingestFlowTypeSchema>;
@@ -305,13 +364,16 @@ export const ingestResultMetaSchema = z.object({
   qualityIssues: z.array(templateQualityIssueSchema).default([]),
   visionModelId: z.string().uuid(),
   structureModelId: z.string().uuid(),
+  taxonomySnapshotHash: z.string().min(1).optional(),
+  classificationWarnings: z.array(z.string()).default([]),
 });
 export type IngestResultMeta = z.infer<typeof ingestResultMetaSchema>;
 
 const TEMPLATE_DRAFT_RULES = [
   '只输出一个满足给定 Schema、可被 JSON.parse 解析的合法 JSON 对象，不要输出 Markdown、代码围栏、思考过程或解释。',
-  '字段必须包含 name、summary、description、category、tags、scenarios、variables、promptTemplate。',
-  'category 仅可为 portrait/ecommerce/poster/logo/illustration/edit。',
+  '字段必须包含 name、summary、description、semantic、variables、promptTemplate。',
+  'semantic 必须包含 workflowType、outputType、scenarios、styles、subjects、tags、unmappedTerms、confidence。',
+  '正式分类字段只可使用系统提供的标准词库 slug；无法映射的概念必须写入 unmappedTerms，不得自行创造正式 slug。',
   'variables 为 1-12 项，key 使用英文标识符，type 仅可为 text/select/number/ratio/image。',
   'text 变量必须生成 4-6 个 suggestions；每项为 1-60 字符、可直接填入提示词、彼此显著不同，用户仍可自由输入。',
   'number 变量仅在推荐值有帮助时生成 3-5 个 suggestions，并使用与字段单位一致的字符串。',
@@ -524,6 +586,7 @@ export const publicTemplateSchema = z.object({
   coverImage: z.string(),
   category: templateCategorySchema,
   tags: z.array(z.string()),
+  semantic: semanticClassificationSchema.optional(),
   variables: z.array(promptVariableSchema),
   promptTemplate: z.string(),
   negativePrompt: z.string().nullable().optional(),

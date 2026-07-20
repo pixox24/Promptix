@@ -119,8 +119,12 @@ test('parses Redis database numbers and encoded credentials consistently', () =>
 });
 
 const draft = {
-  name: '商品海报', summary: '电商主图模板', description: '用于快速生成商品主视觉', category: 'ecommerce',
-  tags: ['电商'], scenarios: ['上新'],
+  name: '商品海报', summary: '电商主图模板', description: '用于快速生成商品主视觉',
+  semantic: {
+    workflowType: 'generate', outputType: 'product_image',
+    tags: ['电商'], scenarios: ['ecommerce_product'], styles: ['commercial_illustration'], subjects: ['product'],
+    unmappedTerms: [], confidence: { outputType: 0.96 },
+  },
   variables: [{ id: 'var-1', key: 'product', label: '商品', type: 'text', required: true }],
   promptTemplate: '为 {{product}} 生成高质感商品海报',
 };
@@ -132,6 +136,28 @@ test('TemplateDraft accepts a valid modular prompt', () => {
 test('TemplateDraft rejects invalid variable keys', () => {
   const invalid = { ...draft, variables: [{ ...draft.variables[0], key: '中文 key' }] };
   assert.equal(templateDraftSchema.safeParse(invalid).success, false);
+});
+
+test('TemplateDraft rejects duplicate taxonomy values and invalid confidence', () => {
+  assert.equal(templateDraftSchema.safeParse({
+    ...draft,
+    semantic: { ...draft.semantic, styles: ['cinematic', 'cinematic'] },
+  }).success, false);
+  assert.equal(templateDraftSchema.safeParse({
+    ...draft,
+    semantic: { ...draft.semantic, confidence: { outputType: 1.1 } },
+  }).success, false);
+});
+
+test('TemplateDraft keeps unknown taxonomy concepts out of canonical fields', () => {
+  assert.equal(templateDraftSchema.safeParse({
+    ...draft,
+    semantic: {
+      ...draft.semantic,
+      outputType: null,
+      unmappedTerms: [{ dimension: 'output_type', label: '全息橱窗', reason: '词库中没有匹配项', confidence: 0.82 }],
+    },
+  }).success, true);
 });
 
 test('publishing requires a cover object key', () => {

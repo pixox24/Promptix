@@ -1,14 +1,15 @@
 import { Hono } from 'hono';
-import { and, asc, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { modelCapabilitySchema, templateDraftSchema } from '@promptix/shared';
+import { modelCapabilitySchema, taxonomySlugSchema, templateDraftSchema, type SemanticClassification } from '@promptix/shared';
 import { getDb } from '../db/client.js';
-import { generationJobs, mediaObjects, promptTemplates, providerModels, providers, templateAssets } from '../db/schema.js';
+import { generationJobs, mediaObjects, promptTemplates, providerModels, providers, taxonomyTerms, templateAssets, templateTaxonomyAssignments } from '../db/schema.js';
 import { requireAdmin, type AdminVars } from '../lib/auth.js';
 import { deleteObject, putObject, storageKind } from '../lib/storage.js';
 import { fail, ok } from '../lib/response.js';
 import { enqueueGenerationJob } from '../lib/job-enqueue.js';
 import { buildTemplateCoverRequest } from '../lib/template-cover.js';
+import { assertConfirmableSemantic, legacyCategoryForOutputType, resolveSemanticTerms, TaxonomyValidationError } from '../lib/taxonomy.js';
 
 const templateInput = templateDraftSchema.extend({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,79}$/).optional(),
@@ -21,6 +22,23 @@ const templateInput = templateDraftSchema.extend({
   isHot: z.boolean().default(false),
   autoCover: z.boolean().default(false),
   coverMode: z.enum(['auto_if_missing', 'auto_preview', 'disabled']).default('disabled'),
+  taxonomyConfirmed: z.boolean().default(false),
+});
+
+// PATCH must not apply the create-schema defaults to omitted fields. In particular,
+// a name-only edit must not silently clear featured flags or review confirmation.
+const templatePatchInput = templateDraftSchema.partial().extend({
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,79}$/).optional(),
+  source: z.enum(['manual', 'image_reverse', 'text_expand']).optional(),
+  sourceMeta: z.record(z.unknown()).optional(),
+  locale: z.string().optional(),
+  i18n: z.record(z.unknown()).optional(),
+  isFeatured: z.boolean().optional(),
+  featuredOrder: z.number().int().min(0).max(1_000_000).optional(),
+  isHot: z.boolean().optional(),
+  autoCover: z.boolean().optional(),
+  coverMode: z.enum(['auto_if_missing', 'auto_preview', 'disabled']).optional(),
+  taxonomyConfirmed: z.boolean().optional(),
 });
 
 function slug(value: string) {
@@ -28,12 +46,53 @@ function slug(value: string) {
   return `${normalized || 'template'}-${Date.now().toString(36)}`;
 }
 
-function publicShape(row: typeof promptTemplates.$inferSelect) {
+type TemplateSemanticView = SemanticClassification;
+
+async function semanticViews(rows: Array<typeof promptTemplates.$inferSelect>) {
+  if (!rows.length) return new Map<string, TemplateSemanticView>();
+  const templateIds = rows.map((row) => row.id);
+  const outputTypeIds = rows.map((row) => row.outputTypeId).filter((id): id is string => Boolean(id));
+  const [assignments, outputTerms] = await Promise.all([
+    getDb().select({ templateId: templateTaxonomyAssignments.templateId, term: taxonomyTerms })
+      .from(templateTaxonomyAssignments)
+      .innerJoin(taxonomyTerms, eq(templateTaxonomyAssignments.termId, taxonomyTerms.id))
+      .where(inArray(templateTaxonomyAssignments.templateId, templateIds)),
+    outputTypeIds.length
+      ? getDb().select().from(taxonomyTerms).where(inArray(taxonomyTerms.id, outputTypeIds))
+      : Promise.resolve([]),
+  ]);
+  const outputById = new Map(outputTerms.map((term) => [term.id, term.slug]));
+  const assignmentsByTemplate = new Map<string, Array<typeof taxonomyTerms.$inferSelect>>();
+  for (const assignment of assignments) {
+    const list = assignmentsByTemplate.get(assignment.templateId) ?? [];
+    list.push(assignment.term);
+    assignmentsByTemplate.set(assignment.templateId, list);
+  }
+  return new Map(rows.map((row) => {
+    const terms = assignmentsByTemplate.get(row.id) ?? [];
+    const meta = row.classificationMeta && typeof row.classificationMeta === 'object'
+      ? row.classificationMeta as { confidence?: SemanticClassification['confidence'] }
+      : undefined;
+    return [row.id, {
+      workflowType: row.workflowType as SemanticClassification['workflowType'],
+      outputType: row.outputTypeId ? outputById.get(row.outputTypeId) ?? null : null,
+      scenarios: terms.filter((term) => term.dimension === 'scenario').map((term) => term.slug),
+      styles: terms.filter((term) => term.dimension === 'style').map((term) => term.slug),
+      subjects: terms.filter((term) => term.dimension === 'subject').map((term) => term.slug),
+      tags: row.tags,
+      unmappedTerms: Array.isArray(row.unmappedTerms) ? row.unmappedTerms as SemanticClassification['unmappedTerms'] : [],
+      confidence: meta?.confidence ?? {},
+    } satisfies TemplateSemanticView];
+  }));
+}
+
+function publicShape(row: typeof promptTemplates.$inferSelect, semantic?: TemplateSemanticView) {
   return {
     id: row.id, name: row.name, summary: row.summary, description: row.description,
     coverImage: row.coverUrl ?? '', category: row.category, tags: row.tags,
     variables: row.variables, promptTemplate: row.promptTemplate,
     negativePrompt: row.negativePrompt, scenarios: row.scenarios,
+    semantic,
     isFeatured: row.isFeatured, featuredOrder: row.featuredOrder, isHot: row.isHot,
     favoriteCount: row.favoriteCount, useCount: row.useCount,
     createdAt: row.createdAt.toISOString(), locale: row.locale,
@@ -42,36 +101,120 @@ function publicShape(row: typeof promptTemplates.$inferSelect) {
 
 export const publicTemplateRoutes = new Hono();
 
+function csvSlugs(value: string | undefined) {
+  if (!value) return [];
+  return [...new Set(value.split(',').map((item) => item.trim()).filter(Boolean))];
+}
+
+function taxonomyExists(dimension: 'scenario' | 'style' | 'subject', slugs: string[]) {
+  return sql`exists (
+    select 1 from ${templateTaxonomyAssignments}
+    inner join ${taxonomyTerms} on ${templateTaxonomyAssignments.termId} = ${taxonomyTerms.id}
+    where ${templateTaxonomyAssignments.templateId} = ${promptTemplates.id}
+      and ${taxonomyTerms.dimension} = ${dimension}
+      and ${taxonomyTerms.slug} in (${sql.join(slugs.map((slug) => sql`${slug}`), sql`, `)})
+  )`;
+}
+
 publicTemplateRoutes.get('/', async (c) => {
   const db = getDb();
-  const category = c.req.query('category');
-  const q = c.req.query('q');
+  const legacyCategory = c.req.query('category');
+  const legacyOutputMap: Record<string, string> = { portrait:'portrait', ecommerce:'product_image', poster:'poster', logo:'logo', illustration:'illustration', edit:'general_visual' };
+  if (legacyCategory && !Object.hasOwn(legacyOutputMap, legacyCategory)) return fail(c, 'INVALID_CATEGORY', 'Invalid legacy category', 400);
+  const outputType = c.req.query('outputType') ?? (legacyCategory ? legacyOutputMap[legacyCategory] : undefined);
+  const q = c.req.query('q')?.trim();
   const tag = c.req.query('tag');
-  const scenario = c.req.query('scenario');
-  const sort = c.req.query('sort') ?? 'hot';
-  const page = Math.max(1, Number(c.req.query('page') ?? 1));
-  const pageSize = Math.min(100, Math.max(1, Number(c.req.query('pageSize') ?? 50)));
+  const scenarios = csvSlugs(c.req.query('scenarios') ?? c.req.query('scenario'));
+  const styles = csvSlugs(c.req.query('styles'));
+  const subjects = csvSlugs(c.req.query('subjects'));
+  const allSlugs = [...(outputType ? [outputType] : []), ...scenarios, ...styles, ...subjects];
+  if (allSlugs.some((slug) => !taxonomySlugSchema.safeParse(slug).success)) return fail(c, 'INVALID_TAXONOMY_FILTER', 'Invalid taxonomy filter', 400);
+  const allowedSorts = new Set(['relevance', 'hot', 'featured', 'latest', 'favorites']);
+  const sort = c.req.query('sort') ?? (q ? 'relevance' : 'hot');
+  if (!allowedSorts.has(sort)) return fail(c, 'INVALID_SORT', 'Invalid sort option', 400);
+  const requestedPage = Number(c.req.query('page') ?? 1);
+  const requestedPageSize = Number(c.req.query('pageSize') ?? 24);
+  if (!Number.isInteger(requestedPage) || requestedPage < 1 || !Number.isInteger(requestedPageSize) || requestedPageSize < 1 || requestedPageSize > 100) {
+    return fail(c, 'INVALID_PAGINATION', 'Pagination must use page >= 1 and pageSize between 1 and 100', 400);
+  }
+  const page = requestedPage;
+  const pageSize = requestedPageSize;
   const filters = [eq(promptTemplates.status, 'published')];
-  if (category) filters.push(eq(promptTemplates.category, category));
-  if (q) filters.push(or(ilike(promptTemplates.name, `%${q}%`), ilike(promptTemplates.summary, `%${q}%`))!);
+  if (outputType) filters.push(sql`exists (select 1 from ${taxonomyTerms} where ${taxonomyTerms.id} = ${promptTemplates.outputTypeId} and ${taxonomyTerms.dimension} = 'output_type' and ${taxonomyTerms.slug} = ${outputType})`);
+  if (scenarios.length) filters.push(taxonomyExists('scenario', scenarios));
+  if (styles.length) filters.push(taxonomyExists('style', styles));
+  if (subjects.length) filters.push(taxonomyExists('subject', subjects));
+  const tokens = q ? q.split(/\s+/).filter(Boolean) : [];
+  for (const token of tokens) {
+    filters.push(or(
+      ilike(promptTemplates.name, `%${token}%`),
+      ilike(promptTemplates.summary, `%${token}%`),
+      ilike(promptTemplates.description, `%${token}%`),
+      ilike(promptTemplates.promptTemplate, `%${token}%`),
+      sql`array_to_string(${promptTemplates.tags}, ' ') ilike ${`%${token}%`}`,
+      sql`exists (
+        select 1 from ${taxonomyTerms}
+        where (
+          ${taxonomyTerms.id} = ${promptTemplates.outputTypeId}
+          or exists (
+            select 1 from ${templateTaxonomyAssignments}
+            where ${templateTaxonomyAssignments.templateId} = ${promptTemplates.id}
+              and ${templateTaxonomyAssignments.termId} = ${taxonomyTerms.id}
+          )
+        ) and (${taxonomyTerms.label} ilike ${`%${token}%`} or array_to_string(${taxonomyTerms.aliases}, ' ') ilike ${`%${token}%`})
+      )`,
+    )!);
+  }
   if (tag) filters.push(sql`${tag} = ANY(${promptTemplates.tags})`);
-  if (scenario) filters.push(sql`${scenario} = ANY(${promptTemplates.scenarios})`);
-  const order = sort === 'featured'
+  const relevance = q ? sql<number>`(
+    case when lower(${promptTemplates.name}) = lower(${q}) then 100 else 0 end +
+    case when exists (select 1 from unnest(${promptTemplates.tags}) as tag where lower(tag) = lower(${q})) then 80 else 0 end +
+    case when exists (
+      select 1 from ${taxonomyTerms}
+      where (${taxonomyTerms.id} = ${promptTemplates.outputTypeId} or exists (
+        select 1 from ${templateTaxonomyAssignments}
+        where ${templateTaxonomyAssignments.templateId} = ${promptTemplates.id}
+          and ${templateTaxonomyAssignments.termId} = ${taxonomyTerms.id}
+      )) and lower(${taxonomyTerms.label}) = lower(${q})
+    ) then 80 else 0 end +
+    case when ${promptTemplates.name} ilike ${`%${q}%`} then 60 else 0 end +
+    case when ${promptTemplates.summary} ilike ${`%${q}%`} then 40 else 0 end +
+    case when exists (
+      select 1 from ${taxonomyTerms}
+      where (${taxonomyTerms.id} = ${promptTemplates.outputTypeId} or exists (
+        select 1 from ${templateTaxonomyAssignments}
+        where ${templateTaxonomyAssignments.templateId} = ${promptTemplates.id}
+          and ${templateTaxonomyAssignments.termId} = ${taxonomyTerms.id}
+      )) and exists (select 1 from unnest(${taxonomyTerms.aliases}) as alias where lower(alias) = lower(${q}))
+    ) then 35 else 0 end +
+    case when ${promptTemplates.description} ilike ${`%${q}%`} then 20 else 0 end +
+    case when ${promptTemplates.promptTemplate} ilike ${`%${q}%`} then 5 else 0 end
+  )` : sql<number>`0`;
+  const order = sort === 'relevance'
+    ? [desc(relevance), desc(promptTemplates.useCount), desc(promptTemplates.createdAt), asc(promptTemplates.id)]
+    : sort === 'featured'
     ? [desc(promptTemplates.isFeatured), asc(sql<number>`CASE WHEN ${promptTemplates.isFeatured} THEN ${promptTemplates.featuredOrder} ELSE 0 END`), desc(promptTemplates.useCount), desc(promptTemplates.createdAt), asc(promptTemplates.id)]
     : sort === 'latest'
       ? [desc(promptTemplates.createdAt), asc(promptTemplates.id)]
       : sort === 'favorites'
         ? [desc(promptTemplates.favoriteCount), desc(promptTemplates.createdAt), asc(promptTemplates.id)]
         : [desc(promptTemplates.useCount), desc(promptTemplates.createdAt), asc(promptTemplates.id)];
-  const rows = await db.select().from(promptTemplates).where(and(...filters)).orderBy(...order)
-    .limit(pageSize).offset((page - 1) * pageSize);
-  return ok(c, { items: rows.map(publicShape), page, pageSize });
+  const where = and(...filters);
+  const [[totalRow], rows] = await Promise.all([
+    db.select({ total: sql<number>`count(*)::int` }).from(promptTemplates).where(where),
+    db.select().from(promptTemplates).where(where).orderBy(...order)
+      .limit(pageSize).offset((page - 1) * pageSize),
+  ]);
+  const semantics = await semanticViews(rows);
+  return ok(c, { items: rows.map((row) => publicShape(row, semantics.get(row.id))), page, pageSize, total: Number(totalRow?.total ?? 0) });
 });
 
 publicTemplateRoutes.get('/:id', async (c) => {
   const [row] = await getDb().select().from(promptTemplates)
     .where(and(eq(promptTemplates.id, c.req.param('id')), eq(promptTemplates.status, 'published'))).limit(1);
-  return row ? ok(c, publicShape(row)) : fail(c, 'NOT_FOUND', 'Template not found', 404);
+  if (!row) return fail(c, 'NOT_FOUND', 'Template not found', 404);
+  const semantics = await semanticViews([row]);
+  return ok(c, publicShape(row, semantics.get(row.id)));
 });
 
 export const adminTemplateRoutes = new Hono<AdminVars>();
@@ -80,14 +223,20 @@ adminTemplateRoutes.use('*', requireAdmin);
 adminTemplateRoutes.get('/', async (c) => {
   const filters = [];
   const status = c.req.query('status'); const category = c.req.query('category'); const q = c.req.query('q');
+  const outputType = c.req.query('outputType');
   const featured = c.req.query('featured');
   if (status) filters.push(eq(promptTemplates.status, status));
   if (category) filters.push(eq(promptTemplates.category, category));
+  if (outputType) {
+    if (!taxonomySlugSchema.safeParse(outputType).success) return fail(c, 'INVALID_TAXONOMY_FILTER', 'Invalid output type', 400);
+    filters.push(sql`exists (select 1 from ${taxonomyTerms} where ${taxonomyTerms.id} = ${promptTemplates.outputTypeId} and ${taxonomyTerms.dimension} = 'output_type' and ${taxonomyTerms.slug} = ${outputType})`);
+  }
   if (featured === 'true' || featured === 'false') filters.push(eq(promptTemplates.isFeatured, featured === 'true'));
   if (q) filters.push(or(ilike(promptTemplates.name, `%${q}%`), ilike(promptTemplates.summary, `%${q}%`))!);
   const rows = await getDb().select().from(promptTemplates)
     .where(filters.length ? and(...filters) : undefined).orderBy(desc(promptTemplates.updatedAt));
-  return ok(c, rows);
+  const semantics = await semanticViews(rows);
+  return ok(c, rows.map((row) => ({ ...row, semantic: semantics.get(row.id) })));
 });
 
 adminTemplateRoutes.post('/', async (c) => {
@@ -95,13 +244,36 @@ adminTemplateRoutes.post('/', async (c) => {
   if (!parsed.success) return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid template', 400);
   const admin = c.get('admin'); const d = parsed.data; const id = d.id ?? slug(d.name);
   try {
-    const [row] = await getDb().insert(promptTemplates).values({
-      id, name:d.name, summary:d.summary, description:d.description, category:d.category,
-      tags:d.tags, scenarios:d.scenarios, variables:d.variables, promptTemplate:d.promptTemplate,
-      negativePrompt:d.negativePrompt, source:d.source, sourceMeta:d.sourceMeta,
-      locale:d.locale, i18n:d.i18n, isFeatured:d.isFeatured, featuredOrder:d.featuredOrder,
-      isHot:d.isHot, createdBy:admin.sub,
-    }).returning();
+    const resolved = await resolveSemanticTerms(d.semantic);
+    if (d.taxonomyConfirmed) assertConfirmableSemantic(resolved.semantic);
+    const reviewStatus = d.taxonomyConfirmed ? 'reviewed'
+      : resolved.semantic.unmappedTerms.length ? 'needs_attention' : 'pending';
+    const scenarioLabels = resolved.assignments.filter((term) => term.dimension === 'scenario').map((term) => term.label);
+    const row = await getDb().transaction(async (tx) => {
+      const [created] = await tx.insert(promptTemplates).values({
+        id, name:d.name, summary:d.summary, description:d.description,
+        category:legacyCategoryForOutputType(resolved.semantic.outputType),
+        workflowType:resolved.semantic.workflowType, outputTypeId:resolved.outputType?.id,
+        tags:resolved.semantic.tags, scenarios:scenarioLabels,
+        taxonomyReviewStatus:reviewStatus, unmappedTerms:resolved.semantic.unmappedTerms,
+        classificationMeta:{ confidence: resolved.semantic.confidence },
+        taxonomyReviewedAt:d.taxonomyConfirmed ? new Date() : null,
+        taxonomyReviewedBy:d.taxonomyConfirmed ? admin.sub : null,
+        variables:d.variables, promptTemplate:d.promptTemplate,
+        negativePrompt:d.negativePrompt, source:d.source, sourceMeta:d.sourceMeta,
+        locale:d.locale, i18n:d.i18n, isFeatured:d.isFeatured, featuredOrder:d.featuredOrder,
+        isHot:d.isHot, createdBy:admin.sub,
+      }).returning();
+      if (resolved.assignments.length) {
+        await tx.insert(templateTaxonomyAssignments).values(resolved.assignments.map((term) => ({
+          templateId: created.id, termId: term.id, source: d.taxonomyConfirmed ? 'admin' : 'ai',
+          confidence: term.dimension === 'scenario' ? resolved.semantic.confidence.scenarios?.toString()
+            : term.dimension === 'style' ? resolved.semantic.confidence.styles?.toString()
+              : resolved.semantic.confidence.subjects?.toString(),
+        })));
+      }
+      return created;
+    });
     let coverJob: typeof generationJobs.$inferSelect | null = null;
     if (d.autoCover && d.coverMode !== 'disabled') {
       const request = buildTemplateCoverRequest(row, d.source === 'image_reverse' ? 'image_reverse_auto_cover' : 'template_revision_cover');
@@ -112,25 +284,69 @@ adminTemplateRoutes.post('/', async (c) => {
         try { await enqueueGenerationJob(created.id); } catch (error) { await getDb().update(generationJobs).set({ status: 'failed', errorMessage: error instanceof Error ? error.message : 'Queue unavailable', finishedAt: new Date() }).where(eq(generationJobs.id, created.id)); coverJob = { ...created, status: 'failed', errorMessage: error instanceof Error ? error.message : 'Queue unavailable' }; }
       }
     }
-    return ok(c, coverJob ? { ...row, coverJob } : row, 201);
-  } catch (e) { return fail(c, 'TEMPLATE_CREATE_FAILED', e instanceof Error ? e.message : 'Create failed', 409); }
+    const semantics = await semanticViews([row]);
+    const shaped = { ...row, semantic: semantics.get(row.id) };
+    return ok(c, coverJob ? { ...shaped, coverJob } : shaped, 201);
+  } catch (e) {
+    if (e instanceof TaxonomyValidationError) return fail(c, e.code, e.message, 400);
+    return fail(c, 'TEMPLATE_CREATE_FAILED', e instanceof Error ? e.message : 'Create failed', 409);
+  }
 });
 
 adminTemplateRoutes.get('/:id', async (c) => {
   const [row] = await getDb().select().from(promptTemplates).where(eq(promptTemplates.id, c.req.param('id'))).limit(1);
   if (!row) return fail(c, 'NOT_FOUND', 'Template not found', 404);
   const [coverJob] = await getDb().select().from(generationJobs).where(and(eq(generationJobs.templateId, row.id), eq(generationJobs.type, 'image_generate'))).orderBy(desc(generationJobs.createdAt)).limit(1);
-  return ok(c, coverJob ? { ...row, coverJob } : row);
+  const semantics = await semanticViews([row]);
+  const shaped = { ...row, semantic: semantics.get(row.id) };
+  return ok(c, coverJob ? { ...shaped, coverJob } : shaped);
 });
 
 adminTemplateRoutes.patch('/:id', async (c) => {
-  const parsed = templateInput.partial().safeParse(await c.req.json().catch(() => null));
+  const parsed = templatePatchInput.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid template', 400);
-  const { id: _ignored, autoCover: _autoCover, coverMode: _coverMode, ...d } = parsed.data;
+  const { id: _ignored, autoCover: _autoCover, coverMode: _coverMode, taxonomyConfirmed, semantic, ...d } = parsed.data;
   if (d.isFeatured === false) d.featuredOrder = 0;
-  const [row] = await getDb().update(promptTemplates).set({ ...d, updatedAt:new Date() })
-    .where(eq(promptTemplates.id, c.req.param('id'))).returning();
-  return row ? ok(c, row) : fail(c, 'NOT_FOUND', 'Template not found', 404);
+  try {
+    let resolved: Awaited<ReturnType<typeof resolveSemanticTerms>> | null = null;
+    if (semantic) {
+      resolved = await resolveSemanticTerms(semantic);
+      if (taxonomyConfirmed) assertConfirmableSemantic(resolved.semantic);
+    }
+    const row = await getDb().transaction(async (tx) => {
+      const semanticPatch = resolved ? {
+        category: legacyCategoryForOutputType(resolved.semantic.outputType),
+        workflowType: resolved.semantic.workflowType,
+        outputTypeId: resolved.outputType?.id ?? null,
+        tags: resolved.semantic.tags,
+        scenarios: resolved.assignments.filter((term) => term.dimension === 'scenario').map((term) => term.label),
+        taxonomyReviewStatus: taxonomyConfirmed ? 'reviewed' as const
+          : resolved.semantic.unmappedTerms.length ? 'needs_attention' as const : 'pending' as const,
+        unmappedTerms: resolved.semantic.unmappedTerms,
+        classificationMeta: { confidence: resolved.semantic.confidence },
+        taxonomyReviewedAt: taxonomyConfirmed ? new Date() : null,
+        taxonomyReviewedBy: taxonomyConfirmed ? c.get('admin').sub : null,
+      } : {};
+      const [updated] = await tx.update(promptTemplates).set({ ...d, ...semanticPatch, updatedAt:new Date() })
+        .where(eq(promptTemplates.id, c.req.param('id'))).returning();
+      if (!updated) return null;
+      if (resolved) {
+        await tx.delete(templateTaxonomyAssignments).where(eq(templateTaxonomyAssignments.templateId, updated.id));
+        if (resolved.assignments.length) {
+          await tx.insert(templateTaxonomyAssignments).values(resolved.assignments.map((term) => ({
+            templateId: updated.id, termId: term.id, source: taxonomyConfirmed ? 'admin' : 'ai',
+          })));
+        }
+      }
+      return updated;
+    });
+    if (!row) return fail(c, 'NOT_FOUND', 'Template not found', 404);
+    const semantics = await semanticViews([row]);
+    return ok(c, { ...row, semantic: semantics.get(row.id) });
+  } catch (error) {
+    if (error instanceof TaxonomyValidationError) return fail(c, error.code, error.message, 400);
+    throw error;
+  }
 });
 
 adminTemplateRoutes.delete('/:id', async (c) => {
@@ -146,6 +362,23 @@ adminTemplateRoutes.post('/:id/publish', async (c) => {
   const [existing] = await getDb().select().from(promptTemplates).where(eq(promptTemplates.id, c.req.param('id'))).limit(1);
   if (!existing) return fail(c, 'NOT_FOUND', 'Template not found', 404);
   if (!existing.coverObjectKey || !existing.coverUrl) return fail(c, 'COVER_REQUIRED', 'A cover image is required before publishing', 409);
+  if (existing.taxonomyReviewStatus !== 'reviewed') return fail(c, 'TAXONOMY_REVIEW_REQUIRED', '请先人工确认模板分类', 409);
+  const semantics = await semanticViews([existing]);
+  const semantic = semantics.get(existing.id);
+  if (!semantic) return fail(c, 'TAXONOMY_REVIEW_REQUIRED', '模板分类不可用', 409);
+  try { assertConfirmableSemantic(semantic); } catch (error) {
+    if (error instanceof TaxonomyValidationError) return fail(c, error.code, error.message, 409);
+    throw error;
+  }
+  const assignedTerms = await getDb().select({ enabled: taxonomyTerms.enabled }).from(templateTaxonomyAssignments)
+    .innerJoin(taxonomyTerms, eq(templateTaxonomyAssignments.termId, taxonomyTerms.id))
+    .where(eq(templateTaxonomyAssignments.templateId, existing.id));
+  const [outputTerm] = existing.outputTypeId
+    ? await getDb().select({ enabled: taxonomyTerms.enabled }).from(taxonomyTerms).where(eq(taxonomyTerms.id, existing.outputTypeId)).limit(1)
+    : [];
+  if (!outputTerm?.enabled || assignedTerms.some((term) => !term.enabled)) {
+    return fail(c, 'TAXONOMY_TERM_DISABLED', '模板使用了已停用的分类词', 409);
+  }
   const [row] = await getDb().update(promptTemplates).set({ status:'published', publishedAt:new Date(), updatedAt:new Date() })
     .where(eq(promptTemplates.id, existing.id)).returning();
   return ok(c, row);

@@ -7,6 +7,7 @@ import {
 } from '../icons';
 import type { SortOption } from '../../types/prompt';
 import { TEMPLATE_USE_SCENARIOS } from '@promptix/shared';
+import type { TaxonomyTerm } from '../../data/taxonomyApi';
 
 export const useScenarios = TEMPLATE_USE_SCENARIOS;
 
@@ -45,6 +46,7 @@ const sortItems: {
   label: string;
   icon: typeof IconFlame;
 }[] = [
+  { id: 'relevance', label: '相关', icon: IconSearch },
   { id: 'hot', label: '热门', icon: IconFlame },
   { id: 'featured', label: '精选', icon: IconSpark },
   { id: 'favorites', label: '高赞', icon: IconTrophy },
@@ -56,9 +58,14 @@ interface FilterSidebarProps {
   onQueryChange: (q: string) => void;
   sort: SortOption;
   onSortChange: (s: SortOption) => void;
-  selectedTags: string[];
-  onToggleTag: (tag: string) => void;
-  onClearScenarios: () => void;
+  taxonomyTerms: TaxonomyTerm[];
+  outputType: string;
+  onOutputTypeChange: (value: string) => void;
+  scenarios: string[];
+  styles: string[];
+  subjects: string[];
+  onToggleTaxonomy: (dimension: 'scenarios' | 'styles' | 'subjects', slug: string) => void;
+  onClearTaxonomy: (dimension: 'scenarios' | 'styles' | 'subjects') => void;
 }
 
 function SectionTitle({ children }: { children: string }) {
@@ -72,60 +79,24 @@ function SectionTitle({ children }: { children: string }) {
   );
 }
 
-function ScenarioTags({
-  selectedTags,
-  onToggleTag,
-}: Pick<FilterSidebarProps, 'selectedTags' | 'onToggleTag'>) {
+function TermTags({ terms, selected, onToggle }: { terms: TaxonomyTerm[]; selected: string[]; onToggle: (slug: string) => void }) {
   return (
     <div className="flex flex-wrap gap-2">
-      {useScenarios.map((scenario) => {
-        const selected = selectedTags.includes(scenario);
+      {terms.map((term) => {
+        const active = selected.includes(term.slug);
         return (
           <button
-            key={scenario}
+            key={term.id}
             type="button"
-            aria-pressed={selected}
-            onClick={() => onToggleTag(scenario)}
+            aria-pressed={active}
+            onClick={() => onToggle(term.slug)}
             className={`max-w-full rounded-lg border px-2.5 py-1.5 text-left text-[11px] font-medium leading-snug transition-colors ${
-              selected
+              active
                 ? 'border-primary bg-primary/12 text-foreground shadow-[0_0_0_1px_color-mix(in_srgb,var(--color-primary)_25%,transparent)]'
                 : 'border-black/10 bg-white/55 text-foreground/65 hover:border-primary/40 hover:bg-white/80 hover:text-foreground'
             }`}
           >
-            {scenario}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function FilterTags({
-  options,
-  selectedTags,
-  onToggleTag,
-}: {
-  options: readonly string[];
-  selectedTags: string[];
-  onToggleTag: (tag: string) => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-2">
-      {options.map((option) => {
-        const selected = selectedTags.includes(option);
-        return (
-          <button
-            key={option}
-            type="button"
-            aria-pressed={selected}
-            onClick={() => onToggleTag(option)}
-            className={`max-w-full rounded-lg border px-2.5 py-1.5 text-left text-[11px] font-medium leading-snug transition-colors ${
-              selected
-                ? 'border-primary bg-primary/12 text-foreground shadow-[0_0_0_1px_color-mix(in_srgb,var(--color-primary)_25%,transparent)]'
-                : 'border-black/10 bg-white/55 text-foreground/65 hover:border-primary/40 hover:bg-white/80 hover:text-foreground'
-            }`}
-          >
-            {option}
+            {term.label}
           </button>
         );
       })}
@@ -138,12 +109,18 @@ export function FilterSidebar({
   onQueryChange,
   sort,
   onSortChange,
-  selectedTags,
-  onToggleTag,
-  onClearScenarios,
+  taxonomyTerms,
+  outputType,
+  onOutputTypeChange,
+  scenarios,
+  styles,
+  subjects,
+  onToggleTaxonomy,
+  onClearTaxonomy,
 }: FilterSidebarProps) {
+  const termsFor = (dimension: TaxonomyTerm['dimension']) => taxonomyTerms.filter((term) => term.dimension === dimension);
   return (
-    <aside className="sticky top-24 z-20 hidden h-[calc(100vh-7.5rem)] w-[17.5rem] shrink-0 md:block">
+    <aside className="sticky top-[4.5rem] z-20 hidden h-[calc(100vh-6rem)] w-[17.5rem] shrink-0 md:block">
       {/* Glass shell */}
       <div className="sidebar-glass relative flex h-full flex-col overflow-hidden rounded-2xl">
         {/* Soft light orbs for glass depth */}
@@ -226,14 +203,22 @@ export function FilterSidebar({
               </nav>
             </section>
 
+            <section>
+              <SectionTitle>产物类型</SectionTitle>
+              <select value={outputType} onChange={(event) => onOutputTypeChange(event.target.value)} className="h-10 w-full rounded-xl border border-white/60 bg-white/55 px-3 text-sm outline-none">
+                <option value="">全部类型</option>
+                {termsFor('output_type').map((term) => <option key={term.id} value={term.slug}>{term.label}</option>)}
+              </select>
+            </section>
+
             {/* 使用场景 */}
             <section>
               <div className="mb-3 flex items-center justify-between gap-2 px-1">
                 <SectionTitle>使用场景</SectionTitle>
-                {selectedTags.some((tag) => useScenarios.includes(tag as (typeof useScenarios)[number])) && (
+                {scenarios.length > 0 && (
                   <button
                     type="button"
-                    onClick={onClearScenarios}
+                    onClick={() => onClearTaxonomy('scenarios')}
                     className="text-[11px] font-medium text-foreground/45 hover:text-foreground"
                   >
                     清除
@@ -241,23 +226,23 @@ export function FilterSidebar({
                 )}
               </div>
               <div className="mb-2 px-1 text-[11px] text-foreground/45">
-                {selectedTags.filter((tag) => useScenarios.includes(tag as (typeof useScenarios)[number])).length > 0
-                  ? `已选 ${selectedTags.filter((tag) => useScenarios.includes(tag as (typeof useScenarios)[number])).length}`
+                {scenarios.length > 0
+                  ? `已选 ${scenarios.length}`
                   : '可多选'}
               </div>
-              <ScenarioTags selectedTags={selectedTags} onToggleTag={onToggleTag} />
+              <TermTags terms={termsFor('scenario')} selected={scenarios} onToggle={(slug) => onToggleTaxonomy('scenarios', slug)} />
             </section>
 
             {/* 风格 */}
             <section>
               <SectionTitle>风格</SectionTitle>
-              <FilterTags options={styleFilters} selectedTags={selectedTags} onToggleTag={onToggleTag} />
+              <TermTags terms={termsFor('style')} selected={styles} onToggle={(slug) => onToggleTaxonomy('styles', slug)} />
             </section>
 
             {/* 画面主体 */}
             <section>
               <SectionTitle>画面主体</SectionTitle>
-              <FilterTags options={themeFilters} selectedTags={selectedTags} onToggleTag={onToggleTag} />
+              <TermTags terms={termsFor('subject')} selected={subjects} onToggle={(slug) => onToggleTaxonomy('subjects', slug)} />
             </section>
           </div>
         </div>
@@ -277,15 +262,22 @@ export function MobileFilterBar({
   onQueryChange,
   sort,
   onSortChange,
-  selectedTags,
-  onToggleTag,
-  onClearScenarios,
+  taxonomyTerms,
+  outputType,
+  onOutputTypeChange,
+  scenarios,
+  styles,
+  subjects,
+  onToggleTaxonomy,
+  onClearTaxonomy,
   open,
   onOpenChange,
 }: FilterSidebarProps & {
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }) {
+  const termsFor = (dimension: TaxonomyTerm['dimension']) => taxonomyTerms.filter((term) => term.dimension === dimension);
+  const selectedCount = scenarios.length + styles.length + subjects.length + (outputType ? 1 : 0);
   return (
     <div className="sticky top-14 z-30 w-full py-2 md:hidden">
       <button
@@ -298,9 +290,9 @@ export function MobileFilterBar({
             <IconFlame size={14} />
           </span>
           筛选
-          {selectedTags.length > 0 && (
+          {selectedCount > 0 && (
             <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-bold text-primary-foreground">
-              {selectedTags.length}
+              {selectedCount}
             </span>
           )}
         </span>
@@ -351,12 +343,17 @@ export function MobileFilterBar({
           </div>
 
           <div>
+            <SectionTitle>产物类型</SectionTitle>
+            <select value={outputType} onChange={(event) => onOutputTypeChange(event.target.value)} className="h-11 w-full rounded-xl border border-white/60 bg-white/55 px-3 text-sm"><option value="">全部类型</option>{termsFor('output_type').map((term) => <option key={term.id} value={term.slug}>{term.label}</option>)}</select>
+          </div>
+
+          <div>
             <div className="mb-3 flex items-center justify-between gap-2">
               <SectionTitle>使用场景</SectionTitle>
-              {selectedTags.some((tag) => useScenarios.includes(tag as (typeof useScenarios)[number])) && (
+              {scenarios.length > 0 && (
                 <button
                   type="button"
-                  onClick={onClearScenarios}
+                  onClick={() => onClearTaxonomy('scenarios')}
                   className="text-[11px] font-medium text-foreground/45 hover:text-foreground"
                 >
                   清除
@@ -364,21 +361,21 @@ export function MobileFilterBar({
               )}
             </div>
             <div className="mb-2 text-[11px] text-foreground/45">
-              {selectedTags.filter((tag) => useScenarios.includes(tag as (typeof useScenarios)[number])).length > 0
-                ? `已选 ${selectedTags.filter((tag) => useScenarios.includes(tag as (typeof useScenarios)[number])).length}`
+              {scenarios.length > 0
+                ? `已选 ${scenarios.length}`
                 : '可多选'}
             </div>
-            <ScenarioTags selectedTags={selectedTags} onToggleTag={onToggleTag} />
+            <TermTags terms={termsFor('scenario')} selected={scenarios} onToggle={(slug) => onToggleTaxonomy('scenarios', slug)} />
           </div>
 
           <div>
             <SectionTitle>风格</SectionTitle>
-            <FilterTags options={styleFilters} selectedTags={selectedTags} onToggleTag={onToggleTag} />
+            <TermTags terms={termsFor('style')} selected={styles} onToggle={(slug) => onToggleTaxonomy('styles', slug)} />
           </div>
 
           <div>
             <SectionTitle>画面主体</SectionTitle>
-            <FilterTags options={themeFilters} selectedTags={selectedTags} onToggleTag={onToggleTag} />
+            <TermTags terms={termsFor('subject')} selected={subjects} onToggle={(slug) => onToggleTaxonomy('subjects', slug)} />
           </div>
 
           <button

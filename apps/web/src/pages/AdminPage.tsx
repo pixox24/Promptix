@@ -8,11 +8,14 @@ import {
   useLocation,
   useParams,
 } from "react-router-dom";
-import type { PromptVariable, TemplateCategory } from "../types/prompt";
+import type { PromptVariable } from "../types/prompt";
+import type { SemanticClassification } from "@promptix/shared";
 import { ProviderModelsPage } from "./admin/ProviderModelsPage";
 import type { AdminModel } from "../types/adminModels";
 import { api } from "../lib/api";
 import { IngestPage } from "./admin/IngestPage";
+import { fetchTaxonomy, type TaxonomyTerm } from "../data/taxonomyApi";
+import { TaxonomyPage } from "./admin/TaxonomyPage";
 
 type Admin = { id: string; email: string; displayName: string; role: string };
 type Template = {
@@ -20,7 +23,8 @@ type Template = {
   name: string;
   summary: string;
   description: string;
-  category: TemplateCategory;
+  category: string;
+  semantic?: SemanticClassification;
   tags: string[];
   scenarios: string[];
   variables: PromptVariable[];
@@ -33,6 +37,7 @@ type Template = {
   featuredOrder: number;
   updatedAt: string;
   coverJob?: Job | null;
+  taxonomyReviewStatus?: "pending" | "needs_attention" | "reviewed";
 };
 type Job = {
   id: string;
@@ -49,9 +54,7 @@ type DraftForm = {
   name: string;
   summary: string;
   description: string;
-  category: TemplateCategory;
-  tags: string[];
-  scenarios: string[];
+  semantic: SemanticClassification;
   variables: PromptVariable[];
   promptTemplate: string;
   negativePrompt: string;
@@ -59,21 +62,11 @@ type DraftForm = {
   isFeatured: boolean;
   featuredOrder: number;
 };
-const cats: TemplateCategory[] = [
-  "portrait",
-  "ecommerce",
-  "poster",
-  "logo",
-  "illustration",
-  "edit",
-];
 const blank = (): DraftForm => ({
   name: "",
   summary: "",
   description: "",
-  category: "illustration",
-  tags: [],
-  scenarios: [],
+  semantic: { workflowType: "generate", outputType: null, tags: [], scenarios: [], styles: [], subjects: [], unmappedTerms: [], confidence: {} },
   variables: [
     {
       id: "var-1",
@@ -228,6 +221,7 @@ function AdminShell({
           <nav className="flex flex-1 gap-1 text-sm">
             <Nav to="/admin/templates">模板</Nav>
             <Nav to="/admin/ingest">智能入库</Nav>
+            <Nav to="/admin/taxonomy">分类词库</Nav>
             <Nav to="/admin/jobs">任务</Nav>
             <Nav to="/admin/providers">模型</Nav>
           </nav>
@@ -249,6 +243,7 @@ function AdminShell({
           <Route path="templates/new" element={<TemplateEditor />} />
           <Route path="templates/:id" element={<TemplateEditor />} />
           <Route path="ingest" element={<IngestPage />} />
+          <Route path="taxonomy" element={<TaxonomyPage />} />
           <Route path="jobs" element={<Jobs />} />
           <Route path="providers" element={<ProviderModelsPage />} />
           <Route path="*" element={<Navigate to="templates" replace />} />
@@ -292,19 +287,26 @@ function TemplateList() {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [featured, setFeatured] = useState("");
+  const [outputType, setOutputType] = useState("");
+  const [taxonomyTerms, setTaxonomyTerms] = useState<TaxonomyTerm[]>([]);
   const [error, setError] = useState("");
   const load = useCallback(
     () =>
       api<Template[]>(
-        `/api/admin/templates?${new URLSearchParams({ ...(q ? { q } : {}), ...(status ? { status } : {}), ...(featured ? { featured } : {}) })}`,
+        `/api/admin/templates?${new URLSearchParams({ ...(q ? { q } : {}), ...(status ? { status } : {}), ...(featured ? { featured } : {}), ...(outputType ? { outputType } : {}) })}`,
       )
         .then(setItems)
         .catch((e) => setError(e.message)),
-    [q, status, featured],
+    [q, status, featured, outputType],
   );
   useEffect(() => {
     load();
   }, [load]);
+  useEffect(() => {
+    fetchTaxonomy().then(setTaxonomyTerms).catch((reason) => setError(reason instanceof Error ? reason.message : "分类词库加载失败"));
+  }, []);
+  const outputTypes = taxonomyTerms.filter((term) => term.dimension === "output_type");
+  const outputLabels = new Map(outputTypes.map((term) => [term.slug, term.label]));
   async function action(id: string, op: string) {
     try {
       await api(`/api/admin/templates/${id}/${op}`, { method: "POST" });
@@ -363,6 +365,10 @@ function TemplateList() {
           <option value="true">仅精选</option>
           <option value="false">非精选</option>
         </select>
+        <select className={`${field} max-w-44`} value={outputType} onChange={(event) => setOutputType(event.target.value)}>
+          <option value="">全部产物类型</option>
+          {outputTypes.map((term) => <option key={term.id} value={term.slug}>{term.label}</option>)}
+        </select>
       </div>
       {error && <Notice text={error} />}
       <div className="overflow-hidden rounded-xl border bg-white">
@@ -388,7 +394,7 @@ function TemplateList() {
                     {t.summary}
                   </p>
                 </td>
-                <td>{t.category}</td>
+                <td>{t.semantic?.outputType ? outputLabels.get(t.semantic.outputType) ?? t.semantic.outputType : "待分类"}</td>
                 <td>
                   {t.isFeatured ? (
                     <span className="text-xs font-medium text-violet-600">
@@ -450,7 +456,12 @@ function TemplateEditor() {
   const [existing, setExisting] = useState<Template | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [taxonomyTerms, setTaxonomyTerms] = useState<TaxonomyTerm[]>([]);
+  const [taxonomyConfirmed, setTaxonomyConfirmed] = useState(false);
   const [genJob, setGenJob] = useState<Job | null>((location.state as { coverJob?: Job } | null)?.coverJob ?? null);
+  useEffect(() => {
+    fetchTaxonomy().then(setTaxonomyTerms).catch((error) => setMessage(error instanceof Error ? error.message : "分类词库加载失败"));
+  }, []);
   useEffect(() => {
     if (id)
       api<Template>(`/api/admin/templates/${id}`)
@@ -460,11 +471,11 @@ function TemplateEditor() {
           setForm({
             ...blank(),
             ...t,
-            tags: t.tags ?? [],
-            scenarios: t.scenarios ?? [],
+            semantic: t.semantic ?? blank().semantic,
             variables: t.variables ?? [],
             negativePrompt: t.negativePrompt ?? "",
           });
+          setTaxonomyConfirmed(t.taxonomyReviewStatus === "reviewed");
         })
         .catch((e) => setMessage(e.message));
   }, [id]);
@@ -490,7 +501,7 @@ function TemplateEditor() {
     setBusy(true);
     setMessage("");
     try {
-      const payload = { ...form, tags: form.tags, scenarios: form.scenarios };
+      const payload = { ...form, taxonomyConfirmed };
       const t = await api<Template>(
         id ? `/api/admin/templates/${id}` : "/api/admin/templates",
         { method: id ? "PATCH" : "POST", body: JSON.stringify(payload) },
@@ -583,6 +594,13 @@ function TemplateEditor() {
       form.variables.map((v, n) => (n === i ? { ...v, [key]: value } : v)),
     );
   }
+  const setSemantic = (patch: Partial<SemanticClassification>) =>
+    set("semantic", { ...form.semantic, ...patch });
+  const toggleSemantic = (key: "scenarios" | "styles" | "subjects", slug: string) => {
+    const values = form.semantic[key];
+    setSemantic({ [key]: values.includes(slug) ? values.filter((value) => value !== slug) : [...values, slug] });
+  };
+  const termsFor = (dimension: TaxonomyTerm["dimension"]) => taxonomyTerms.filter((term) => term.dimension === dimension);
   const coverInput =
     genJob?.input && typeof genJob.input === "object"
       ? (genJob.input as Record<string, unknown>)
@@ -651,14 +669,15 @@ function TemplateEditor() {
               onChange={(v) => set("name", v)}
             />
             <label className="text-sm">
-              分类
+              产物类型
               <select
                 className={`${field} mt-1`}
-                value={form.category}
-                onChange={(e) => set("category", e.target.value)}
+                value={form.semantic.outputType ?? ""}
+                onChange={(e) => setSemantic({ outputType: e.target.value || null })}
               >
-                {cats.map((c) => (
-                  <option key={c}>{c}</option>
+                <option value="">待选择</option>
+                {termsFor("output_type").map((term) => (
+                  <option key={term.id} value={term.slug}>{term.label}</option>
                 ))}
               </select>
             </label>
@@ -673,32 +692,11 @@ function TemplateEditor() {
             value={form.description}
             onChange={(v) => set("description", v)}
           />
-          <Input
-            label="标签（逗号分隔）"
-            value={form.tags.join(",")}
-            onChange={(v) =>
-              set(
-                "tags",
-                v
-                  .split(",")
-                  .map((x) => x.trim())
-                  .filter(Boolean),
-              )
-            }
-          />
-          <Input
-            label="适用场景（逗号分隔）"
-            value={form.scenarios.join(",")}
-            onChange={(v) =>
-              set(
-                "scenarios",
-                v
-                  .split(",")
-                  .map((x) => x.trim())
-                  .filter(Boolean),
-              )
-            }
-          />
+          <label className="text-sm">工作模式<select className={`${field} mt-1`} value={form.semantic.workflowType} onChange={(event) => setSemantic({ workflowType: event.target.value as "generate" | "edit" })}><option value="generate">生成图片</option><option value="edit">编辑图片</option></select></label>
+          {([['scenario', 'scenarios', '使用场景'], ['style', 'styles', '视觉风格'], ['subject', 'subjects', '画面主体']] as const).map(([dimension, key, label]) => <fieldset key={dimension}><legend className="mb-2 text-sm font-medium">{label}</legend><div className="flex flex-wrap gap-2">{termsFor(dimension).map((term) => { const active = form.semantic[key].includes(term.slug); return <button type="button" key={term.id} aria-pressed={active} onClick={() => toggleSemantic(key, term.slug)} className={`rounded-full border px-3 py-1.5 text-xs ${active ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-gray-200 text-gray-600'}`}>{term.label}</button>; })}</div></fieldset>)}
+          <Input label="自由标签（逗号分隔）" value={form.semantic.tags.join(",")} onChange={(value) => setSemantic({ tags: value.split(",").map((item) => item.trim()).filter(Boolean) })} />
+          {form.semantic.unmappedTerms.length > 0 && <Notice text={`还有 ${form.semantic.unmappedTerms.length} 个待处理分类词，请在智能入库校对页处理后再确认。`} />}
+          <label className="flex items-start gap-2 rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm"><input className="mt-0.5" type="checkbox" checked={taxonomyConfirmed} onChange={(event) => setTaxonomyConfirmed(event.target.checked)} /><span>我已人工确认产物类型、使用场景、风格和画面主体</span></label>
           <div className="flex items-center justify-between">
             <h2 className="font-semibold">变量</h2>
             <button

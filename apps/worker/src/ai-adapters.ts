@@ -2,6 +2,7 @@ import {
   promptVariableObjectSchema,
   DEFAULT_INGEST_SYSTEM_PROMPTS,
   ingestSystemPromptSchema,
+  semanticClassificationSchema,
   templateDraftObjectSchema,
   templateDraftSchema,
   type TemplateDraft,
@@ -77,9 +78,36 @@ const generatedVariableSchema = promptVariableObjectSchema.extend({
   id: promptVariableObjectSchema.shape.id.optional(),
 });
 
+const generatedSemanticSchema = semanticClassificationSchema.extend({
+  outputType: z.string().trim().min(1).max(80).nullable(),
+  scenarios: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
+  styles: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
+  subjects: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
+});
+
 const generatedDraftSchema = templateDraftObjectSchema.extend({
+  semantic: generatedSemanticSchema,
   variables: generatedVariableSchema.array().min(1).max(12),
 });
+
+const taxonomySnapshotSchema = z.object({
+  version: z.literal(1),
+  terms: z.array(z.object({
+    dimension: z.enum(['output_type', 'scenario', 'style', 'subject']),
+    slug: z.string(),
+    label: z.string(),
+    aliases: z.array(z.string()).default([]),
+  })),
+});
+
+export const SEMANTIC_CLASSIFICATION_RULES = `
+## 语义分类规则
+1. semantic.workflowType 只可为 generate 或 edit；只有模板必须依赖输入图片进行编辑时才选择 edit。
+2. outputType 表达最终产物，scenarios 表达用途，styles 表达视觉风格，subjects 表达画面主体，四个维度不得混用。
+3. outputType、scenarios、styles、subjects 只能使用 taxonomy_catalog 中对应维度的 slug。
+4. 无法映射的概念写入 unmappedTerms，不得自行创造正式 slug。
+5. 每个维度只选择有充分依据且有检索价值的最少必要项，不得为了填满字段而猜测。
+6. confidence 为 0 到 1 的辅助判断，不决定是否发布。`;
 
 async function inlineImage(imageUrl: string) {
   if (imageUrl.startsWith('data:')) {
@@ -97,9 +125,53 @@ async function inlineImage(imageUrl: string) {
   return { data: bytes.toString('base64'), mediaType: mime };
 }
 
-export function normalizeDraft(output: z.infer<typeof generatedDraftSchema>): TemplateDraft {
-  return templateDraftSchema.parse({
+function normalizeSemantic(
+  semantic: z.infer<typeof generatedSemanticSchema>,
+  snapshotValue: unknown,
+) {
+  const snapshot = taxonomySnapshotSchema.safeParse(snapshotValue);
+  if (!snapshot.success) return { semantic: semanticClassificationSchema.parse(semantic), warnings: ['任务缺少可用的词库快照'] };
+  const byDimension = new Map<string, Map<string, string>>();
+  for (const term of snapshot.data.terms) {
+    const values = byDimension.get(term.dimension) ?? new Map<string, string>();
+    for (const value of [term.slug, term.label, ...term.aliases]) values.set(value.trim().toLocaleLowerCase('zh-CN'), term.slug);
+    byDimension.set(term.dimension, values);
+  }
+  const unmapped = [...semantic.unmappedTerms];
+  const warnings: string[] = [];
+  const mapOne = (dimension: 'output_type' | 'scenario' | 'style' | 'subject', value: string | null) => {
+    if (!value) return null;
+    const mapped = byDimension.get(dimension)?.get(value.trim().toLocaleLowerCase('zh-CN'));
+    if (mapped) return mapped;
+    unmapped.push({ dimension, label: value, reason: '标准词库中没有匹配项' });
+    warnings.push(`${dimension}:${value} 未映射`);
+    return null;
+  };
+  const mapMany = (dimension: 'scenario' | 'style' | 'subject', values: string[]) =>
+    [...new Set(values.map((value) => mapOne(dimension, value)).filter((value): value is string => Boolean(value)))];
+  return {
+    semantic: semanticClassificationSchema.parse({
+      ...semantic,
+      outputType: mapOne('output_type', semantic.outputType),
+      scenarios: mapMany('scenario', semantic.scenarios),
+      styles: mapMany('style', semantic.styles),
+      subjects: mapMany('subject', semantic.subjects),
+      tags: [...new Set(semantic.tags)],
+      unmappedTerms: unmapped.filter((term, index, list) =>
+        list.findIndex((candidate) => candidate.dimension === term.dimension && candidate.label === term.label) === index),
+    }),
+    warnings,
+  };
+}
+
+export function normalizeDraft(
+  output: z.infer<typeof generatedDraftSchema>,
+  taxonomySnapshot?: unknown,
+): { draft: TemplateDraft; classificationWarnings: string[] } {
+  const normalizedSemantic = normalizeSemantic(output.semantic, taxonomySnapshot);
+  return { draft: templateDraftSchema.parse({
     ...output,
+    semantic: normalizedSemantic.semantic,
     variables: output.variables.map((variable, index) => {
       const normalized = {
         ...variable,
@@ -113,13 +185,13 @@ export function normalizeDraft(output: z.infer<typeof generatedDraftSchema>): Te
       }
       return normalized;
     }),
-  });
+  }), classificationWarnings: normalizedSemantic.warnings };
 }
 
 export async function structurePromptDetailed(
   config: ResolvedModel,
   input: JsonRecord,
-): Promise<{ draft: TemplateDraft; repaired: boolean }> {
+): Promise<{ draft: TemplateDraft; repaired: boolean; classificationWarnings: string[] }> {
   if (!hasCapability(config.model, 'text') ||
       !hasCapability(config.model, 'structured_output')) {
     throw new Error(`Model ${config.model.name} lacks text or structured_output capability`);
@@ -129,10 +201,14 @@ export async function structurePromptDetailed(
   const systemPrompt = ingestSystemPromptSchema.parse(
     input.systemPrompt ?? DEFAULT_INGEST_SYSTEM_PROMPTS.text_expand,
   );
+  const taxonomySnapshot = taxonomySnapshotSchema.safeParse(input.taxonomySnapshot);
+  const taxonomyContext = taxonomySnapshot.success
+    ? `\n\n${SEMANTIC_CLASSIFICATION_RULES}\n\n<taxonomy_catalog>\n${JSON.stringify(taxonomySnapshot.data)}\n</taxonomy_catalog>`
+    : `\n\n${SEMANTIC_CLASSIFICATION_RULES}`;
   const configuredMax = defaults.language.maxOutputTokens ?? positiveIntegerEnv('INGEST_STRUCTURE_MAX_OUTPUT_TOKENS', 6000);
   const execute = (correction: string, maxOutputTokens: number) => generateText({
     model: createLanguageModel(config),
-    system: systemPrompt,
+    system: `${systemPrompt}${taxonomyContext}`,
     output: Output.object({ schema: generatedDraftSchema, name: 'promptix_template_draft' }),
     maxRetries: 0,
     abortSignal: AbortSignal.timeout(120000),
@@ -146,14 +222,16 @@ export async function structurePromptDetailed(
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const result = await execute(attempt ? '\n上一次输出无法解析或不符合 Schema。请重新生成完整 JSON，确保字符串、数组和对象全部闭合。' : '', attempt ? Math.max(configuredMax, 8000) : configuredMax);
-      return { draft: normalizeDraft(result.output), repaired: false };
+      const normalized = normalizeDraft(result.output, input.taxonomySnapshot);
+      return { ...normalized, repaired: false };
     } catch (error) {
       previousError = error;
       if (!NoObjectGeneratedError.isInstance(error)) throw error;
       if (error.text) {
         try {
           const parsed = parseRepairableJson(error.text);
-          return { draft: normalizeDraft(generatedDraftSchema.parse(parsed.value)), repaired: parsed.repaired };
+          const normalized = normalizeDraft(generatedDraftSchema.parse(parsed.value), input.taxonomySnapshot);
+          return { ...normalized, repaired: parsed.repaired };
         } catch {
           // One targeted regeneration below is safer than accepting an invalid repaired object.
         }

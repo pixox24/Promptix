@@ -6,9 +6,7 @@ const draft = {
   name: '优化模板',
   summary: '优化后的提示词',
   description: '结构化描述',
-  category: 'illustration',
-  tags: ['插画'],
-  scenarios: ['创作'],
+  semantic: { workflowType: 'generate', outputType: 'illustration', tags: ['插画'], scenarios: ['concept_art'], styles: ['commercial_illustration'], subjects: ['character_ip'], unmappedTerms: [], confidence: {} },
   variables: [{ key: 'subject', label: '主体', type: 'text' }],
   promptTemplate: '为 {{subject}} 创作一张精致插画',
 };
@@ -50,7 +48,7 @@ test('AI SDK produces and normalizes a TemplateDraft', async () => {
   globalThis.fetch = async (url, init) => {
     assert.equal(url, 'https://api.deepseek.com/chat/completions');
     const body = JSON.parse(init.body);
-    assert.equal(body.messages.some((message) => message.role === 'system' && message.content === 'CUSTOM SYSTEM'), true);
+    assert.equal(body.messages.some((message) => message.role === 'system' && message.content.includes('CUSTOM SYSTEM')), true);
     assert.equal(body.model, 'deepseek-v4-pro');
     assert.equal(body.thinking.type, 'disabled');
     return new Response(JSON.stringify({

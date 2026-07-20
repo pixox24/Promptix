@@ -62,6 +62,7 @@ npm run build
 | `/admin/login` | 运营后台登录 |
 | `/admin/templates` | 模板 CMS、封面、发布/下架 |
 | `/admin/ingest` | 图片反推、文本扩写 |
+| `/admin/taxonomy` | 产物类型、使用场景、风格、主体词库 |
 | `/admin/jobs` | 异步任务与重试 |
 | `/admin/providers` | Provider 连接与多 Model、能力及默认用途配置 |
 
@@ -76,6 +77,8 @@ npm run build
 - `custom_65535_async` 保留显式提交与轮询协议，保存 `providerJobId`、过期时间、成本和尺寸档位等厂商元数据。
 - 新任务以 `modelId` 选型并同步保存 `providerId`；仅含旧 `providerId` 的历史任务仍可解析和重试。
 - 已发布模板由公开 API `/api/templates` 提供给前台；API 不可见时开发环境回退静态模板。
+- 提示词优化与图片反推统一输出多维语义分类，新模板一律先进入草稿；产物类型、场景、风格和主体经人工确认后才允许发布。
+- 前台搜索、动态分类筛选、排序和分页均由服务端执行；同一维度多选为 OR，不同维度组合为 AND。
 - OSS 永久对象使用 `public/`，试跑/输入使用 `temp/`；`temp/` 应配置 7 天生命周期。
 
 完整部署、备份、密钥轮换与故障排查见 [运维手册](docs/ops.md)。
@@ -104,4 +107,4 @@ npm run build
 3. 在该 Provider 下添加一个或多个 Model，声明真实能力和调用默认值。
 4. 为业务至少配置一个默认文本模型；需要生图或图片反推时，再分别配置默认生图、默认视觉模型。
 
-升级已有部署前先备份 PostgreSQL，再执行 `npm run db:migrate`。迁移会新增 `provider_models` 和 `generation_jobs.model_id` 并回填旧数据，不删除旧 Provider/Job 兼容字段。详细验证与回滚步骤见 [运维手册](docs/ops.md)。
+升级已有部署前先备份 PostgreSQL，再执行 `npm run db:migrate`。迁移采用增量兼容方式并保留旧字段；详细验证与回滚步骤见 [运维手册](docs/ops.md)。
