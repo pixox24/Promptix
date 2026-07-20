@@ -16,6 +16,7 @@ import { api } from "../lib/api";
 import { IngestPage } from "./admin/IngestPage";
 import { fetchTaxonomy, type TaxonomyTerm } from "../data/taxonomyApi";
 import { TaxonomyPage } from "./admin/TaxonomyPage";
+import { useConfirmDialog } from "../context/ConfirmDialogContext";
 
 type Admin = { id: string; email: string; displayName: string; role: string };
 type Template = {
@@ -290,6 +291,7 @@ function TemplateList() {
   const [outputType, setOutputType] = useState("");
   const [taxonomyTerms, setTaxonomyTerms] = useState<TaxonomyTerm[]>([]);
   const [error, setError] = useState("");
+  const confirm = useConfirmDialog();
   const load = useCallback(
     () =>
       api<Template[]>(
@@ -327,6 +329,25 @@ function TemplateList() {
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "精选状态更新失败");
+    }
+  }
+  async function permanentlyDelete(template: Template) {
+    if (template.status === "published") {
+      setError("已发布模板必须先下架，才能永久删除");
+      return;
+    }
+    const confirmed = await confirm({
+      title: "永久删除模板？",
+      description: `「${template.name}」及其封面、分类关联和历史模板记录将被永久删除，无法恢复。\n请确认你确实要丢弃此模板。`,
+      confirmLabel: "永久删除",
+      danger: true,
+    });
+    if (!confirmed) return;
+    try {
+      await api(`/api/admin/templates/${template.id}`, { method: "DELETE" });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "模板永久删除失败");
     }
   }
   return (
@@ -421,19 +442,19 @@ function TemplateList() {
                     编辑
                   </Link>
                   {t.status !== "published" ? (
-                    <button
-                      onClick={() => action(t.id, "publish")}
-                      className="text-emerald-600"
-                    >
-                      发布
-                    </button>
+                    <div className="inline-flex items-center gap-3">
+                      <button onClick={() => action(t.id, "publish")} className="text-emerald-600">发布</button>
+                      {t.status === "archived" && (
+                        <button
+                          onClick={() => permanentlyDelete(t)}
+                          className="text-red-600"
+                        >
+                          永久删除
+                        </button>
+                      )}
+                    </div>
                   ) : (
-                    <button
-                      onClick={() => action(t.id, "archive")}
-                      className="text-amber-600"
-                    >
-                      下架
-                    </button>
+                    <button onClick={() => action(t.id, "archive")} className="text-amber-600">下架</button>
                   )}
                 </td>
               </tr>

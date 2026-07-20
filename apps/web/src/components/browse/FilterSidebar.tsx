@@ -204,11 +204,12 @@ export function FilterSidebar({
             </section>
 
             <section>
-              <SectionTitle>产物类型</SectionTitle>
-              <select value={outputType} onChange={(event) => onOutputTypeChange(event.target.value)} className="h-10 w-full rounded-xl border border-white/60 bg-white/55 px-3 text-sm outline-none">
-                <option value="">全部类型</option>
-                {termsFor('output_type').map((term) => <option key={term.id} value={term.slug}>{term.label}</option>)}
-              </select>
+              <div className="mb-3 flex items-center justify-between gap-2 px-1">
+                <SectionTitle>快捷筛选</SectionTitle>
+                {outputType && <button type="button" onClick={() => onOutputTypeChange('')} className="text-[11px] font-medium text-foreground/45 hover:text-foreground">清除</button>}
+              </div>
+              <div className="mb-2 px-1 text-[11px] text-foreground/45">单选</div>
+              <TermTags terms={termsFor('output_type')} selected={outputType ? [outputType] : []} onToggle={(slug) => onOutputTypeChange(outputType === slug ? '' : slug)} />
             </section>
 
             {/* 使用场景 */}
@@ -343,8 +344,12 @@ export function MobileFilterBar({
           </div>
 
           <div>
-            <SectionTitle>产物类型</SectionTitle>
-            <select value={outputType} onChange={(event) => onOutputTypeChange(event.target.value)} className="h-11 w-full rounded-xl border border-white/60 bg-white/55 px-3 text-sm"><option value="">全部类型</option>{termsFor('output_type').map((term) => <option key={term.id} value={term.slug}>{term.label}</option>)}</select>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <SectionTitle>快捷筛选</SectionTitle>
+              {outputType && <button type="button" onClick={() => onOutputTypeChange('')} className="text-[11px] font-medium text-foreground/45 hover:text-foreground">清除</button>}
+            </div>
+            <div className="mb-2 text-[11px] text-foreground/45">单选</div>
+            <TermTags terms={termsFor('output_type')} selected={outputType ? [outputType] : []} onToggle={(slug) => onOutputTypeChange(outputType === slug ? '' : slug)} />
           </div>
 
           <div>

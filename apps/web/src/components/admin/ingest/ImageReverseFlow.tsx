@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ClipboardPaste, Upload } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { useIngestJob } from '../../../hooks/useIngestJob';
 import { eligibleStructureModels, eligibleVisionModels, ingestFlowStatus, parseIngestDraft } from '../../../lib/ingest-workflow';
@@ -17,6 +18,7 @@ export function ImageReverseFlow({ models, prompt, onModelsUpdated, onStatusChan
   const [structureModelId, setStructureModelId] = useState('');
   const [visionModelId, setVisionModelId] = useState('');
   const [error, setError] = useState('');
+  const [readingClipboard, setReadingClipboard] = useState(false);
   const { job, track, retry } = useIngestJob();
   const structureModels = eligibleStructureModels(models);
   const visionModels = eligibleVisionModels(models);
@@ -41,6 +43,32 @@ export function ImageReverseFlow({ models, prompt, onModelsUpdated, onStatusChan
     if (!candidate.type.startsWith('image/')) { setError('请选择图片文件'); return; }
     if (candidate.size > MAX_IMAGE_BYTES) { setError('图片必须不超过 10MB'); return; }
     setFile(candidate);
+  }
+
+  function acceptPastedItems(items: DataTransferItemList) {
+    const image = Array.from(items).find((item) => item.kind === 'file' && item.type.startsWith('image/'));
+    if (!image) { setError('剪贴板中没有图片'); return; }
+    acceptFile(image.getAsFile() ?? undefined);
+  }
+
+  async function pasteFromClipboard() {
+    if (!navigator.clipboard?.read) { setError('当前浏览器不支持读取剪贴板，请聚焦上传区域后按 Ctrl/Cmd+V'); return; }
+    setReadingClipboard(true);
+    setError('');
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find((candidate) => candidate.startsWith('image/'));
+        if (!type) continue;
+        const blob = await item.getType(type);
+        const extension = type.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png';
+        acceptFile(new File([blob], `clipboard-${Date.now()}.${extension}`, { type }));
+        return;
+      }
+      setError('剪贴板中没有图片');
+    } catch (cause) {
+      setError(cause instanceof DOMException && cause.name === 'NotAllowedError' ? '未获得剪贴板权限，请聚焦上传区域后按 Ctrl/Cmd+V' : '无法读取剪贴板图片');
+    } finally { setReadingClipboard(false); }
   }
 
   async function submit() {
@@ -94,10 +122,13 @@ export function ImageReverseFlow({ models, prompt, onModelsUpdated, onStatusChan
     <SystemPromptPanel flowType="image_reverse" config={effectivePrompt} onChange={setEffectivePrompt} />
 
     <div className="rounded-xl border bg-white p-4">
-      <label className="grid min-h-48 cursor-pointer place-items-center rounded-lg border-2 border-dashed border-gray-300 p-4 text-center hover:border-violet-400" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); acceptFile(event.dataTransfer.files[0]); }}>
-        {previewUrl ? <img src={previewUrl} alt="待反推图片预览" className="max-h-64 rounded-lg object-contain" /> : <span className="text-sm text-gray-500">点击或拖拽上传参考图（图片，最大 10MB）</span>}
-        <input hidden type="file" accept="image/*" onChange={(event) => acceptFile(event.target.files?.[0])} />
-      </label>
+      <div tabIndex={0} aria-label="参考图上传区域，可粘贴图片" className="rounded-lg outline-none focus:ring-2 focus:ring-violet-200" onClick={(event) => event.currentTarget.focus()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (status !== 'queued' && status !== 'running') acceptFile(event.dataTransfer.files[0]); }} onPaste={(event) => { event.preventDefault(); if (status !== 'queued' && status !== 'running') acceptPastedItems(event.clipboardData.items); }}>
+        <label className="grid min-h-48 cursor-pointer place-items-center rounded-lg border-2 border-dashed border-gray-300 p-4 text-center hover:border-violet-400">
+          {previewUrl ? <img src={previewUrl} alt="待反推图片预览" className="max-h-64 rounded-lg object-contain" /> : <span className="flex flex-col items-center gap-2 text-sm text-gray-500"><Upload size={22} />点击或拖拽上传参考图<br/><span className="text-xs text-gray-400">支持 Ctrl/Cmd+V 粘贴，最大 10MB</span></span>}
+          <input hidden type="file" accept="image/*" onChange={(event) => acceptFile(event.target.files?.[0])} />
+        </label>
+      </div>
+      <div className="mt-3 flex items-center gap-3"><button type="button" className="inline-flex items-center gap-2 rounded-lg border border-violet-200 px-3 py-2 text-sm text-violet-700 hover:bg-violet-50 disabled:opacity-50" onClick={pasteFromClipboard} disabled={readingClipboard || status === 'queued' || status === 'running'}><ClipboardPaste size={16}/>{readingClipboard ? '读取中…' : '从剪贴板粘贴'}</button><span className="text-xs text-gray-400">也可先点击上传区再直接粘贴</span></div>
       {file && <div className="mt-3 flex items-center justify-between text-xs text-gray-500"><span className="truncate">{file.name} · {(file.size / 1024 / 1024).toFixed(2)} MB</span><button type="button" className="text-red-600" onClick={() => setFile(undefined)}>移除图片</button></div>}
       <button type="button" className="mt-4 rounded-lg bg-violet-600 px-4 py-2 text-sm text-white disabled:opacity-50" disabled={!file || !structureModelId || !visionModelId || status === 'queued' || status === 'running'} onClick={submit}>{status === 'queued' || status === 'running' ? '反推处理中…' : '执行图片反推'}</button>
       {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
