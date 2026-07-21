@@ -45,3 +45,10 @@ test('queries use shared queue predicates, stable id ordering, and safe projecti
   assert.match(toolsSource, /approval/);
   assert.doesNotMatch(toolsSource, /apiKeyEncrypted|apiKeyEnv|generationJobs\.input/);
 });
+
+test('captured query scopes cannot include templates changed after submission', async () => {
+  const { capturedGovernanceQuery } = await import(new URL('../dist/lib/governance-run-preparation.js', import.meta.url));
+  const query = { scenarios: [], styles: [], subjects: [], sort: 'updated_desc' };
+  assert.equal(capturedGovernanceQuery(query, '2026-07-21T10:00:00.000Z').updatedBefore, '2026-07-21T10:00:00.000Z');
+  assert.equal(capturedGovernanceQuery({ ...query, updatedBefore: '2026-07-20T10:00:00.000Z' }, '2026-07-21T10:00:00.000Z').updatedBefore, '2026-07-20T10:00:00.000Z');
+});

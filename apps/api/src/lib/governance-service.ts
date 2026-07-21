@@ -26,7 +26,10 @@ export class GovernanceService {
     const run = await this.repository.createRun({ ...input, scope, ruleSetId: active.id, ruleSetVersion: active.version });
     try { await this.queue.enqueue({ type: 'template_governance_plan', targetId: run.id }); }
     catch (error) {
-      await this.repository.failRun(run.id, 'QUEUE_UNAVAILABLE', error instanceof Error ? error.message : 'Queue unavailable');
+      const code = error instanceof GovernanceStateError ? error.code : 'QUEUE_UNAVAILABLE';
+      const message = error instanceof Error ? error.message : 'Queue unavailable';
+      await this.repository.failRun(run.id, code, message);
+      if (error instanceof GovernanceStateError) throw error;
       throw new GovernanceStateError('QUEUE_UNAVAILABLE', '治理任务入队失败，运行记录已标记失败');
     }
     return run;

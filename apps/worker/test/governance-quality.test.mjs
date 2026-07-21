@@ -18,3 +18,12 @@ test('duplicate candidates are normalized, deterministic, and bounded', async ()
   assert.equal(candidates.length, 5);
   assert.deepEqual(candidates.map((item) => item.id), ['copy-00', 'copy-01', 'copy-02', 'copy-03', 'copy-04']);
 });
+
+test('builds per-template model signals instead of sending an empty placeholder', async () => {
+  const { buildGovernanceSignals } = await import(moduleUrl);
+  const template = { id: 'a', name: 'A', summary: '', promptTemplate: 'short', variables: [], coverUrl: null, taxonomyReviewStatus: 'pending', unmappedTerms: [] };
+  const signals = buildGovernanceSignals([template]);
+  assert.equal(signals[0].templateId, 'a');
+  assert.ok(signals[0].issues.length > 0);
+  assert.deepEqual(signals[0].duplicateCandidates, []);
+});

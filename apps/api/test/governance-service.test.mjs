@@ -34,6 +34,14 @@ test('queue failures become visible failed state', async () => {
   assert.equal(f.getRunStatus(), 'failed');
 });
 
+test('preparation failures preserve their actionable error code', async () => {
+  const { GovernanceService, GovernanceStateError } = await import(moduleUrl); const f = fixture();
+  f.queue.enqueue = async () => { throw new GovernanceStateError('SNAPSHOT_MISSING', '模板缺少版本快照'); };
+  const service = new GovernanceService(f.repository, f.queue);
+  await assert.rejects(() => service.createRun({ goal: 'inspect', scope, requestedBy: 'admin', idempotencyKey: 'run-key-3', promptVersion: 'v1' }), /缺少版本快照/);
+  assert.deepEqual(f.events.at(-1), ['failRun', 'SNAPSHOT_MISSING']);
+});
+
 test('approval rechecks rules and versions and enqueues only after transition', async () => {
   const { GovernanceService } = await import(moduleUrl); const f = fixture(); const service = new GovernanceService(f.repository, f.queue);
   await service.approve({ changeSetId: 'set-1', reviewerId: 'admin', note: '确认下架', idempotencyKey: 'approve-1' });

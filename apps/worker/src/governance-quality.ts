@@ -12,6 +12,12 @@ export type GovernanceQualityInput = {
 
 export type GovernanceQualitySignal = { code: string; severity: 'attention' | 'critical'; detail: string };
 
+export type GovernanceSignalBundle = {
+  templateId: string;
+  issues: GovernanceQualitySignal[];
+  duplicateCandidates: Array<{ id: string; similarity: number }>;
+};
+
 const placeholders = (prompt: string) => [...prompt.matchAll(/{{\s*([a-zA-Z0-9_-]+)\s*}}/g)].map((match) => match[1]);
 const normalize = (value: string) => value.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 const tokens = (value: string) => new Set(normalize(value).split(/\s+/).filter(Boolean));
@@ -45,4 +51,12 @@ export function evaluateTemplateQuality(input: GovernanceQualityInput): Governan
   const unresolved = [...new Set(placeholders(input.promptTemplate).filter((key) => !declared.has(key)))];
   if (unresolved.length) signals.push({ code: 'UNRESOLVED_VARIABLES', severity: 'critical', detail: `未声明变量：${unresolved.join(', ')}` });
   return signals;
+}
+
+export function buildGovernanceSignals(inputs: GovernanceQualityInput[]): GovernanceSignalBundle[] {
+  return inputs.map((input) => ({
+    templateId: input.id,
+    issues: evaluateTemplateQuality(input),
+    duplicateCandidates: findDuplicateCandidates(input, inputs),
+  }));
 }

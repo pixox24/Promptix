@@ -18,6 +18,7 @@ import { hasCapability, type ResolvedModel } from './model-types.js';
 import { pipelineError } from './job-errors.js';
 import { outputDiagnostics, parseRepairableJson } from './structured-output.js';
 import { GOVERNANCE_PROMPT_VERSION, TEMPLATE_GOVERNANCE_SYSTEM_PROMPT } from './governance-prompt.js';
+import { buildGovernanceSignals } from './governance-quality.js';
 import { normalizeGovernanceBatch } from './template-governance-planner.js';
 
 type JsonRecord = Record<string, unknown>;
@@ -277,6 +278,18 @@ export async function generateGovernanceProposals(config: ResolvedModel, input: 
   const snapshots = templateVersionSnapshotSchema.array().max(50).parse(input.snapshots);
   const taxonomyCatalog = z.array(z.object({ slug: z.string() })).max(2_000).parse(input.taxonomyCatalog ?? []);
   const rules = governanceRuleSetSchema.parse(input.rules);
+  const goal = z.string().trim().min(1).max(2_000).parse(input.goal ?? '执行模板治理巡检');
+  const signals = buildGovernanceSignals(snapshots.map((snapshot) => ({
+    id: snapshot.templateId,
+    name: snapshot.name,
+    summary: snapshot.summary,
+    promptTemplate: snapshot.promptTemplate,
+    variables: snapshot.variables,
+    coverUrl: snapshot.coverUrl,
+    taxonomyReviewStatus: snapshot.semantic.unmappedTerms.length ? 'needs_attention' : 'reviewed',
+    unmappedTerms: snapshot.semantic.unmappedTerms,
+    confidence: snapshot.semantic.confidence,
+  })));
   const defaults = normalizeModelDefaults(config.provider.adapterType, config.model.defaults);
   const result = await generateText({
     model: createLanguageModel(config),
@@ -287,7 +300,7 @@ export async function generateGovernanceProposals(config: ResolvedModel, input: 
     ...defaults.language,
     temperature: 0.1,
     maxOutputTokens: defaults.language.maxOutputTokens ?? 8000,
-    prompt: JSON.stringify({ promptVersion: GOVERNANCE_PROMPT_VERSION, snapshots, signals: input.signals ?? [], taxonomyCatalog, rules }),
+    prompt: JSON.stringify({ promptVersion: GOVERNANCE_PROMPT_VERSION, goal, snapshots, signals, taxonomyCatalog, rules }),
   });
   return normalizeGovernanceBatch({
     raw: result.output,

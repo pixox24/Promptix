@@ -29,11 +29,19 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
     const [rules] = await db.select().from(governanceRuleSets).where(eq(governanceRuleSets.id, job.data.ruleSetId)).limit(1);
     if (!rules || !rules.enabled || rules.version !== job.data.ruleSetVersion) return { skipped: true, reason: 'RULE_SET_CHANGED' };
     const [run] = await db.insert(agentRuns).values({ trigger: 'scheduled', goal: '定时模板治理巡检', scope: { mode: 'query', query: { scenarios: [], styles: [], subjects: [], sort: 'updated_desc' }, exclusions: [], snapshotAt: new Date().toISOString(), schedulerJobId: job.id }, promptVersion: 'template-governance-v1', ruleSetId: rules.id, ruleSetVersion: rules.version, status: 'queued' }).returning();
-    const model = await resolvePrimaryModel('template_governance_plan', null, null);
-    const input = await buildScheduledGovernanceInput(rules.rules);
-    const proposals = await generateGovernanceProposals(model, input);
-    const persisted = await persistGovernancePlan(run.id, proposals);
-    return { runId: run.id, status: 'planned', persisted };
+    try {
+      const model = await resolvePrimaryModel('template_governance_plan', null, null);
+      await db.update(agentRuns).set({ status: 'analyzing', modelId: model.model.id, startedAt: new Date(), progress: { phase: 'analyzing', percent: 20 } }).where(eq(agentRuns.id, run.id));
+      const input = await buildScheduledGovernanceInput(rules.rules);
+      const proposals = await generateGovernanceProposals(model, input);
+      const persisted = await persistGovernancePlan(run.id, proposals);
+      const execution = persisted.changeSetId && persisted.automatic > 0 ? await executeGovernanceJob(persisted.changeSetId) : null;
+      return { runId: run.id, status: execution?.status ?? 'planned', persisted, execution };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await db.update(agentRuns).set({ status: 'failed', errorCode: 'GOVERNANCE_PLAN_FAILED', errorMessage: message, finishedAt: new Date(), progress: { phase: 'failed', percent: 100 } }).where(eq(agentRuns.id, run.id));
+      throw error;
+    }
   }
   const jobId = job.data.jobId;
   const [record]=await db.select().from(generationJobs).where(eq(generationJobs.id,jobId)).limit(1);
@@ -72,7 +80,8 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
         const targetId = (record.input as { targetId?: unknown }).targetId;
         if (typeof targetId !== 'string') throw new Error('Governance plan job is missing targetId');
         const persisted = await persistGovernancePlan(targetId, proposals);
-        output = { proposals, persisted };
+        const execution = persisted.changeSetId && persisted.automatic > 0 ? await executeGovernanceJob(persisted.changeSetId) : null;
+        output = { proposals, persisted, execution };
       } else if (jobType === 'image_generate') {
         output = await generateImage(primary, record.input as Record<string, unknown>);
         output = await persistGeneratedOutput(record.id, record.templateId, output);
@@ -113,6 +122,10 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
     const message=error instanceof Error?error.message:String(error);
     const pipelineError = error instanceof IngestPipelineError ? error : null;
     await db.update(generationJobs).set({status:'failed',errorMessage:message,errorCode:pipelineError?.details.code,errorDetails:pipelineError?.details,finishedAt:new Date()}).where(eq(generationJobs.id,record.id));
+    if (record.type === 'template_governance_plan') {
+      const targetId = (record.input as { targetId?: unknown }).targetId;
+      if (typeof targetId === 'string') await db.update(agentRuns).set({ status: 'failed', errorCode: pipelineError?.details.code ?? 'GOVERNANCE_PLAN_FAILED', errorMessage: message, progress: { phase: 'failed', percent: 100 }, finishedAt: new Date() }).where(eq(agentRuns.id, targetId));
+    }
     console.error(JSON.stringify({level:'error',event:'job_failed',jobId:record.id,type:record.type,error:message}));
     if (pipelineError && !pipelineError.details.retryable) throw new UnrecoverableError(message);
     throw error;

@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
-import { desc, eq, inArray } from 'drizzle-orm';
-import { governanceRuleSetSchema, governanceSelectionScopeSchema, modelCapabilitySchema, templateVersionSnapshotSchema, type GovernanceQueueId, type GovernanceTemplateQuery } from '@promptix/shared';
+import { desc, eq, inArray, sql } from 'drizzle-orm';
+import { governanceRuleSetSchema, governanceSelectionScopeSchema, type GovernanceQueueId } from '@promptix/shared';
 import { z } from 'zod';
 import { getDb } from '../db/client.js';
-import { agentRuns, generationJobs, governanceApprovals, governanceChangeSetItems, governanceChangeSets, governanceProposals, governanceRuleSets, providerModels, providers, taxonomyTerms } from '../db/schema.js';
+import { agentRuns, generationJobs, governanceApprovals, governanceChangeSetItems, governanceChangeSets, governanceProposals, governanceRuleSets, providerModels } from '../db/schema.js';
 import { requireAdmin, type AdminVars } from '../lib/auth.js';
 import { GovernanceQueryValidationError, parseGovernancePageQuery } from '../lib/governance-query.js';
 import { inspect_template, search_templates, submit_for_approval, validate_template } from '../lib/governance-tools.js';
@@ -12,6 +12,7 @@ import { createGovernanceRepository } from '../lib/governance-repository.js';
 import { GovernanceService, GovernanceStateError } from '../lib/governance-service.js';
 import { enqueueGenerationJob } from '../lib/job-enqueue.js';
 import { governanceSchedulerStatus, registerGovernanceScheduler } from '../lib/governance-scheduler.js';
+import { GovernancePreparationError, prepareGovernanceRun } from '../lib/governance-run-preparation.js';
 
 const commandInput = z.object({
   goal: z.string().trim().min(1).max(2_000),
@@ -20,30 +21,25 @@ const commandInput = z.object({
 });
 const actionInput = z.object({ idempotencyKey: z.string().trim().min(8).max(200), note: z.string().max(2_000).default(''), deleteConfirmation: z.string().optional() });
 const changeSetInput = z.object({ runId: z.string().uuid(), proposalIds: z.array(z.string().uuid()).min(1).max(1_000), idempotencyKey: z.string().trim().min(8).max(200) });
+const runListInput = z.object({
+  status: z.string().trim().max(80).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
 
 function service() {
   return new GovernanceService(createGovernanceRepository(), {
     enqueue: async ({ type, targetId }) => {
       let modelId: string | undefined; let providerId: string | undefined;
       if (type === 'template_governance_plan') {
-        const rows = await getDb().select({ model: providerModels, provider: providers }).from(providerModels)
-          .innerJoin(providers, eq(providerModels.providerId, providers.id)).where(eq(providerModels.isDefaultText, true)).limit(20);
-        const selected = rows.find((row) => row.model.enabled && row.provider.enabled && modelCapabilitySchema.array().parse(row.model.capabilities).includes('structured_output'));
-        if (!selected) throw new Error('No enabled structured-output text model');
-        modelId = selected.model.id; providerId = selected.provider.id;
-        const [run] = await getDb().select().from(agentRuns).where(eq(agentRuns.id, targetId)).limit(1);
-        if (!run) throw new Error('Agent run not found');
-        const [ruleSet] = await getDb().select().from(governanceRuleSets).where(eq(governanceRuleSets.id, run.ruleSetId)).limit(1);
-        if (!ruleSet) throw new Error('Governance rules not found');
-        const scope = governanceSelectionScopeSchema.parse(run.scope);
-        const templateIds = scope.mode === 'explicit'
-          ? scope.templateIds
-          : (await search_templates({ query: scope.query as GovernanceTemplateQuery, pageSize: governanceRuleSetSchema.parse(ruleSet.rules).schedule.scanLimit })).items.map((item) => item.id).filter((id) => !scope.exclusions.includes(id));
-        const snapshots = (await Promise.all(templateIds.map(async (templateId) => (await inspect_template({ templateId }))?.currentSnapshot)))
-          .map((snapshot) => templateVersionSnapshotSchema.parse(snapshot));
-        const taxonomyCatalog = await getDb().select({ slug: taxonomyTerms.slug }).from(taxonomyTerms).where(eq(taxonomyTerms.enabled, true));
-        const [job] = await getDb().insert(generationJobs).values({ type, status: 'pending', actorId: run.requestedBy, modelId, providerId, input: { targetId, snapshots, taxonomyCatalog, rules: ruleSet.rules, signals: [] } }).returning();
-        await getDb().update(agentRuns).set({ status: 'analyzing', modelId, startedAt: new Date() }).where(eq(agentRuns.id, run.id));
+        let prepared;
+        try { prepared = await prepareGovernanceRun(targetId); }
+        catch (error) {
+          if (error instanceof GovernancePreparationError) throw new GovernanceStateError(error.code, error.message);
+          throw error;
+        }
+        modelId = prepared.model.id; providerId = prepared.provider.id;
+        const [job] = await getDb().insert(generationJobs).values({ type, status: 'pending', actorId: prepared.run.requestedBy, modelId, providerId, input: prepared.input }).returning();
+        await getDb().update(agentRuns).set({ status: 'analyzing', modelId, startedAt: new Date(), errorCode: null, errorMessage: null }).where(eq(agentRuns.id, prepared.run.id));
         try { await enqueueGenerationJob(job.id); }
         catch (error) { await getDb().update(generationJobs).set({ status: 'failed', errorCode: 'QUEUE_UNAVAILABLE', errorMessage: error instanceof Error ? error.message : 'Queue unavailable', finishedAt: new Date() }).where(eq(generationJobs.id, job.id)); throw error; }
         return;
@@ -167,15 +163,42 @@ governanceRoutes.post('/change-sets/:id/rollback', async (c) => {
 });
 
 governanceRoutes.get('/runs', async (c) => {
-  const rows = await getDb().select().from(agentRuns).orderBy(desc(agentRuns.createdAt)).limit(100);
-  return ok(c, { items: rows });
+  const parsed = runListInput.safeParse(c.req.query());
+  if (!parsed.success) return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid run query', 400);
+  const rows = await getDb().select({ run: agentRuns, modelName: providerModels.name, modelIdentifier: providerModels.modelId })
+    .from(agentRuns).leftJoin(providerModels, eq(agentRuns.modelId, providerModels.id))
+    .where(parsed.data.status ? eq(agentRuns.status, parsed.data.status) : undefined)
+    .orderBy(desc(agentRuns.createdAt)).limit(parsed.data.limit);
+  return ok(c, { items: rows.map(({ run, modelName, modelIdentifier }) => ({ ...run, model: run.modelId ? { id: run.modelId, name: modelName, modelId: modelIdentifier } : null })) });
 });
 
 governanceRoutes.get('/runs/:id', async (c) => {
   const [run] = await getDb().select().from(agentRuns).where(eq(agentRuns.id, c.req.param('id'))).limit(1);
   if (!run) return fail(c, 'NOT_FOUND', 'Agent run not found', 404);
-  const proposals = await getDb().select().from(governanceProposals).where(eq(governanceProposals.runId, run.id)).orderBy(desc(governanceProposals.createdAt));
-  return ok(c, { ...run, proposals });
+  const [proposals, changeSets, jobs, models] = await Promise.all([
+    getDb().select().from(governanceProposals).where(eq(governanceProposals.runId, run.id)).orderBy(desc(governanceProposals.createdAt)),
+    getDb().select().from(governanceChangeSets).where(eq(governanceChangeSets.runId, run.id)).orderBy(desc(governanceChangeSets.createdAt)),
+    getDb().select().from(generationJobs).where(sql`${generationJobs.input}->>'targetId' = ${run.id}`).orderBy(desc(generationJobs.createdAt)).limit(1),
+    run.modelId ? getDb().select().from(providerModels).where(eq(providerModels.id, run.modelId)).limit(1) : Promise.resolve([]),
+  ]);
+  const jobInput = (jobs[0]?.input ?? {}) as Record<string, unknown>;
+  const snapshots = Array.isArray(jobInput.snapshots) ? jobInput.snapshots : [];
+  const signals = Array.isArray(jobInput.signals) ? jobInput.signals : [];
+  return ok(c, {
+    ...run,
+    model: models[0] ? { id: models[0].id, name: models[0].name, modelId: models[0].modelId } : null,
+    requestPreview: {
+      goal: run.goal,
+      promptVersion: run.promptVersion,
+      ruleSetVersion: run.ruleSetVersion,
+      templateCount: snapshots.length,
+      signalCount: signals.length,
+      templateIds: snapshots.slice(0, 100).map((value) => typeof value === 'object' && value ? String((value as { templateId?: unknown }).templateId ?? '') : '').filter(Boolean),
+    },
+    job: jobs[0] ? { id: jobs[0].id, status: jobs[0].status, errorCode: jobs[0].errorCode, errorMessage: jobs[0].errorMessage, createdAt: jobs[0].createdAt, startedAt: jobs[0].startedAt, finishedAt: jobs[0].finishedAt } : null,
+    proposals,
+    changeSets,
+  });
 });
 
 governanceRoutes.get('/change-sets/:id', async (c) => {

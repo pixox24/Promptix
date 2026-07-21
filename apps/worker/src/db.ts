@@ -80,7 +80,13 @@ export const agentRuns = pgTable('agent_runs', {
   promptVersion: text('prompt_version').notNull(),
   ruleSetId: uuid('rule_set_id').notNull(),
   ruleSetVersion: integer('rule_set_version').notNull(),
+  modelId: uuid('model_id'),
   status: text('status').notNull(),
+  progress: jsonb('progress'),
+  stats: jsonb('stats'),
+  errorCode: text('error_code'),
+  errorMessage: text('error_message'),
+  startedAt: timestamp('started_at', { withTimezone: true }),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -90,7 +96,7 @@ export const governanceProposals = pgTable('governance_proposals', {
 });
 
 export const governanceChangeSets = pgTable('governance_change_sets', {
-  id: uuid('id').defaultRandom().primaryKey(), runId: uuid('run_id').notNull(), scopeSnapshot: jsonb('scope_snapshot').notNull(), exclusionIds: text('exclusion_ids').array().notNull(), ruleSetId: uuid('rule_set_id').notNull(), ruleSetVersion: integer('rule_set_version').notNull(), idempotencyKey: text('idempotency_key').notNull(), status: text('status').notNull(), summary: jsonb('summary').notNull(), rollbackUntil: timestamp('rollback_until', { withTimezone: true }), createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(), updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  id: uuid('id').defaultRandom().primaryKey(), runId: uuid('run_id').notNull(), scopeSnapshot: jsonb('scope_snapshot').notNull(), exclusionIds: text('exclusion_ids').array().notNull(), ruleSetId: uuid('rule_set_id').notNull(), ruleSetVersion: integer('rule_set_version').notNull(), idempotencyKey: text('idempotency_key').notNull(), status: text('status').notNull(), summary: jsonb('summary').notNull(), rollbackUntil: timestamp('rollback_until', { withTimezone: true }), executedAt: timestamp('executed_at', { withTimezone: true }), createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(), updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const governanceChangeSetItems = pgTable('governance_change_set_items', {

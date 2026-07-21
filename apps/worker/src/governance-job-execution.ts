@@ -1,6 +1,6 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { classifyGovernanceRisk, governanceProposalPatchSchema, governanceRuleSetSchema, templateVersionSnapshotSchema, type GovernanceField } from '@promptix/shared';
-import { db, governanceChangeSetItems, governanceChangeSets, governanceProposals, governanceRuleSets, promptTemplates, taxonomyTerms, templateTaxonomyAssignments, templateVersions } from './db.js';
+import { db, agentRuns, governanceChangeSetItems, governanceChangeSets, governanceProposals, governanceRuleSets, promptTemplates, taxonomyTerms, templateTaxonomyAssignments, templateVersions } from './db.js';
 
 function mutationPatch(action: string, patch: Record<string, unknown>) {
   const allowed = ['name', 'summary', 'tags', 'promptTemplate', 'variables', 'isFeatured', 'featuredOrder'] as const;
@@ -19,6 +19,7 @@ export async function executeGovernanceJob(changeSetId: string) {
   const [active] = await db.select().from(governanceRuleSets).where(eq(governanceRuleSets.enabled, true)).limit(1);
   if (!active || active.id !== changeSet.ruleSetId || active.version !== changeSet.ruleSetVersion) throw new Error('RULE_SET_CHANGED');
   const rules = governanceRuleSetSchema.parse(active.rules);
+  await db.update(agentRuns).set({ status: 'auto_executing', progress: { phase: 'executing', percent: 85 } }).where(eq(agentRuns.id, changeSet.runId));
   const rows = await db.select({ item: governanceChangeSetItems, proposal: governanceProposals }).from(governanceChangeSetItems).innerJoin(governanceProposals, eq(governanceChangeSetItems.proposalId, governanceProposals.id)).where(eq(governanceChangeSetItems.changeSetId, changeSet.id));
   const outcomes: Array<{ itemId: string; status: string }> = [];
   for (const { item, proposal } of rows.filter(({ item }) => ['pending', 'approved', 'failed'].includes(item.status) || (item.status === 'awaiting_approval' && changeSet.status === 'approved'))) {
@@ -57,9 +58,20 @@ export async function executeGovernanceJob(changeSetId: string) {
       await db.update(governanceChangeSetItems).set({ status: 'failed', errorCode: error instanceof Error ? error.message : 'ITEM_EXECUTION_FAILED', finishedAt: new Date() }).where(eq(governanceChangeSetItems.id, item.id)); outcomes.push({ itemId: item.id, status: 'failed' });
     }
   }
-  const applied = outcomes.filter((outcome) => outcome.status === 'applied').length; const failed = outcomes.filter((outcome) => ['failed', 'conflict'].includes(outcome.status)).length;
-  const status = applied && failed ? 'partially_succeeded' : failed ? 'failed' : outcomes.some((outcome) => outcome.status === 'awaiting_approval') ? 'awaiting_approval' : 'succeeded';
-  await db.update(governanceChangeSets).set({ status, summary: { ...(changeSet.summary as object), applied, failed }, updatedAt: new Date() }).where(eq(governanceChangeSets.id, changeSet.id));
+  const finalItems = await db.select().from(governanceChangeSetItems).where(eq(governanceChangeSetItems.changeSetId, changeSet.id));
+  const applied = finalItems.filter((item) => item.status === 'applied').length;
+  const conflicts = finalItems.filter((item) => item.status === 'conflict').length;
+  const failed = finalItems.filter((item) => item.status === 'failed').length;
+  const awaitingApproval = finalItems.filter((item) => item.status === 'awaiting_approval').length;
+  const status = failed || conflicts
+    ? applied ? 'partially_succeeded' : 'failed'
+    : awaitingApproval ? 'awaiting_approval' : 'rollback_available';
+  const runStatus = failed || conflicts
+    ? applied ? 'partially_succeeded' : 'failed'
+    : awaitingApproval ? 'awaiting_approval' : 'succeeded';
+  const summary = { ...(changeSet.summary as object), applied, conflicts, failed, awaitingApproval };
+  await db.update(governanceChangeSets).set({ status, summary, executedAt: new Date(), updatedAt: new Date() }).where(eq(governanceChangeSets.id, changeSet.id));
+  await db.update(agentRuns).set({ status: runStatus, stats: summary, progress: { phase: runStatus === 'awaiting_approval' ? 'awaiting_approval' : 'completed', percent: 100 }, finishedAt: runStatus === 'awaiting_approval' ? null : new Date() }).where(eq(agentRuns.id, changeSet.runId));
   return { changeSetId, status, outcomes };
 }
 
@@ -80,5 +92,6 @@ export async function rollbackGovernanceJob(changeSetId: string) {
     });
   }
   await db.update(governanceChangeSets).set({ status: 'rolled_back', updatedAt: new Date() }).where(eq(governanceChangeSets.id, changeSetId));
+  await db.update(agentRuns).set({ status: 'succeeded', progress: { phase: 'rolled_back', percent: 100 }, finishedAt: new Date() }).where(eq(agentRuns.id, changeSet.runId));
   return { changeSetId, status: 'rolled_back' };
 }
