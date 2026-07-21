@@ -16,6 +16,7 @@ import { api, ApiError } from "../lib/api";
 import { IngestPage } from "./admin/IngestPage";
 import { fetchTaxonomy, type TaxonomyTerm } from "../data/taxonomyApi";
 import { TaxonomyPage } from "./admin/TaxonomyPage";
+import { TemplateGovernancePage } from "./admin/TemplateGovernancePage";
 import { useConfirmDialog } from "../context/ConfirmDialogContext";
 
 type Admin = { id: string; email: string; displayName: string; role: string };
@@ -241,7 +242,7 @@ function AdminShell({
       <main className="mx-auto max-w-[1500px] p-5 md:p-8">
         <Routes>
           <Route index element={<Navigate to="templates" replace />} />
-          <Route path="templates" element={<TemplateList />} />
+          <Route path="templates" element={<TemplateGovernancePage />} />
           <Route path="templates/new" element={<TemplateEditor />} />
           <Route path="templates/:id" element={<TemplateEditor />} />
           <Route path="ingest" element={<IngestPage />} />
@@ -284,7 +285,7 @@ function Header({
   );
 }
 
-function TemplateList() {
+export function TemplateList() {
   const [items, setItems] = useState<Template[]>([]);
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
