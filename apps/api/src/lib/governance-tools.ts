@@ -10,6 +10,7 @@ import {
   templateVersions,
 } from '../db/schema.js';
 import { buildGovernanceFilters, encodeGovernanceCursor, governanceOrder } from './governance-query.js';
+import type { GovernanceService } from './governance-service.js';
 
 export async function search_templates(input: {
   query: GovernanceTemplateQuery;
@@ -91,3 +92,23 @@ export async function validate_template(input: { templateId: string }) {
   if (inspected.template.status === 'published' && inspected.template.taxonomyReviewStatus !== 'reviewed') issues.push({ code: 'TAXONOMY_REVIEW_REQUIRED', message: 'Published templates require reviewed taxonomy' });
   return { valid: issues.length === 0, issues };
 }
+
+export const plan_changes = (service: GovernanceService, input: Parameters<GovernanceService['createRun']>[0]) => service.createRun(input);
+export const preview_changes = async (input: { changeSetId: string }) => {
+  const [changeSet] = await getDb().select().from(governanceChangeSets).where(eq(governanceChangeSets.id, input.changeSetId)).limit(1);
+  if (!changeSet) return null;
+  const items = await getDb().select({ item: governanceChangeSetItems, proposal: governanceProposals }).from(governanceChangeSetItems)
+    .innerJoin(governanceProposals, eq(governanceChangeSetItems.proposalId, governanceProposals.id)).where(eq(governanceChangeSetItems.changeSetId, input.changeSetId));
+  return { changeSet, items };
+};
+export const execute_auto_changes = (service: GovernanceService, input: Parameters<GovernanceService['retry']>[0]) => service.retry(input);
+export const submit_for_approval = async (input: { changeSetId: string; idempotencyKey: string }) => {
+  const [updated] = await getDb().update(governanceChangeSets).set({ status: 'awaiting_approval', updatedAt: new Date() })
+    .where(and(eq(governanceChangeSets.id, input.changeSetId), eq(governanceChangeSets.status, 'planned'))).returning();
+  return updated ?? null;
+};
+export const get_change_set_status = async (input: { changeSetId: string }) => {
+  const [row] = await getDb().select({ id: governanceChangeSets.id, status: governanceChangeSets.status, summary: governanceChangeSets.summary }).from(governanceChangeSets).where(eq(governanceChangeSets.id, input.changeSetId)).limit(1);
+  return row ?? null;
+};
+export const rollback_change_set = (service: GovernanceService, input: Parameters<GovernanceService['rollback']>[0]) => service.rollback(input);

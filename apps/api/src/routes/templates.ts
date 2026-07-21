@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { modelCapabilitySchema, taxonomySlugSchema, templateDraftSchema, type SemanticClassification } from '@promptix/shared';
+import { classifyGovernanceRisk, governanceRuleSetSchema, modelCapabilitySchema, taxonomySlugSchema, templateDraftSchema, type SemanticClassification } from '@promptix/shared';
 import { getDb } from '../db/client.js';
-import { generationJobs, governanceAuditEvents, mediaObjects, promptTemplates, providerModels, providers, taxonomyTerms, templateAssets, templateTaxonomyAssignments, templateVersions } from '../db/schema.js';
+import { agentRuns, generationJobs, governanceAuditEvents, governanceChangeSetItems, governanceChangeSets, governanceProposals, governanceRuleSets, mediaObjects, promptTemplates, providerModels, providers, taxonomyTerms, templateAssets, templateTaxonomyAssignments, templateVersions } from '../db/schema.js';
 import { requireAdmin, type AdminVars } from '../lib/auth.js';
 import { deleteObject, putObject, storageKind } from '../lib/storage.js';
 import { fail, ok } from '../lib/response.js';
@@ -418,56 +418,40 @@ adminTemplateRoutes.patch('/:id', async (c) => {
   }
 });
 
+async function createLifecycleApproval(input: {
+  template: typeof promptTemplates.$inferSelect;
+  action: 'publish' | 'archive' | 'delete';
+  actorId: string;
+  idempotencyKey: string;
+  semantic: TemplateSemanticView;
+}) {
+  const db = getDb();
+  const [active] = await db.select().from(governanceRuleSets).where(eq(governanceRuleSets.enabled, true)).limit(1);
+  if (!active) throw new Error('No active governance rules');
+  return db.transaction(async (tx) => {
+    const [replay] = await tx.select({ changeSetId: governanceAuditEvents.changeSetId }).from(governanceAuditEvents)
+      .where(and(eq(governanceAuditEvents.eventType, 'template.lifecycle_requested'), sql`${governanceAuditEvents.payload}->>'idempotencyKey' = ${input.idempotencyKey}`)).limit(1);
+    if (replay?.changeSetId) return { changeSetId: replay.changeSetId, status: 'awaiting_approval' as const };
+    const [run] = await tx.insert(agentRuns).values({ trigger: 'manual', goal: `${input.action}:${input.template.id}`, scope: { mode: 'explicit', templateIds: [input.template.id], proposalIds: [] }, promptVersion: 'lifecycle-direct-v1', ruleSetId: active.id, ruleSetVersion: active.version, status: 'awaiting_approval', requestedBy: input.actorId }).returning();
+    const currentSnapshot = buildTemplateVersionSnapshot(input.template, input.semantic);
+    const rules = governanceRuleSetSchema.parse(active.rules);
+    const decision = classifyGovernanceRisk({ action: input.action, changedFields: [], confidence: 1, batchSize: 1 }, rules);
+    const [proposal] = await tx.insert(governanceProposals).values({ runId: run.id, templateId: input.template.id, baseVersion: input.template.currentVersion, currentSnapshot, action: input.action, proposedPatch: {}, reasonCodes: ['LIFECYCLE_REQUEST'], explanation: `管理员请求${input.action}模板`, confidence: '1', riskLevel: decision.riskLevel, requiresApproval: true, status: 'awaiting_approval' }).returning();
+    const [changeSet] = await tx.insert(governanceChangeSets).values({ runId: run.id, scopeSnapshot: { mode: 'explicit', templateIds: [input.template.id], proposalIds: [proposal.id] }, ruleSetId: active.id, ruleSetVersion: active.version, idempotencyKey: input.idempotencyKey, status: 'awaiting_approval', summary: { automatic: 0, approval: 1, conflict: 0, skipped: 0 } }).returning();
+    await tx.insert(governanceChangeSetItems).values({ changeSetId: changeSet.id, proposalId: proposal.id, templateId: input.template.id, status: 'awaiting_approval' });
+    await tx.insert(governanceAuditEvents).values({ actorType: 'admin', actorId: input.actorId, eventType: 'template.lifecycle_requested', targetType: 'template', targetId: input.template.id, runId: run.id, changeSetId: changeSet.id, proposalId: proposal.id, payload: { idempotencyKey: input.idempotencyKey, action: input.action } });
+    return { changeSetId: changeSet.id, status: 'awaiting_approval' as const };
+  });
+}
+
 adminTemplateRoutes.delete('/:id', async (c) => {
   const [row] = await getDb().select().from(promptTemplates).where(eq(promptTemplates.id, c.req.param('id'))).limit(1);
   if (!row) return fail(c, 'NOT_FOUND', 'Template not found', 404);
-  if (row.status === 'published') return fail(c, 'ARCHIVE_FIRST', 'Archive a published template before deleting it', 409);
-  if (row.coverObjectKey) await deleteObject(row.coverObjectKey);
-  await getDb().delete(promptTemplates).where(eq(promptTemplates.id, row.id));
-  return ok(c, { ok:true });
+  const body = await c.req.json().catch(() => ({}));
+  const idempotencyKey = typeof body.idempotencyKey === 'string' ? body.idempotencyKey : crypto.randomUUID();
+  const semantics = await semanticViews([row]);
+  return ok(c, await createLifecycleApproval({ template: row, action: 'delete', actorId: c.get('admin').sub, idempotencyKey, semantic: semantics.get(row.id)! }), 202);
 });
-
-async function writeLifecycleVersion(input: {
-  template: typeof promptTemplates.$inferSelect;
-  expectedVersion: number;
-  idempotencyKey: string;
-  status: 'published' | 'archived';
-  actorId: string;
-}) {
-  const semantics = await semanticViews([input.template]);
-  return getDb().transaction(async (tx) => {
-    const [replayed] = await tx.select({ id: governanceAuditEvents.id }).from(governanceAuditEvents).where(and(
-      eq(governanceAuditEvents.eventType, `template.${input.status}`),
-      eq(governanceAuditEvents.targetId, input.template.id),
-      sql`${governanceAuditEvents.payload}->>'idempotencyKey' = ${input.idempotencyKey}`,
-    )).limit(1);
-    if (replayed) {
-      const [current] = await tx.select().from(promptTemplates).where(eq(promptTemplates.id, input.template.id)).limit(1);
-      return current ?? null;
-    }
-    const [updated] = await tx.update(promptTemplates).set({
-      status: input.status,
-      publishedAt: input.status === 'published' ? new Date() : input.template.publishedAt,
-      currentVersion: sql`${promptTemplates.currentVersion} + 1`,
-      updatedAt: new Date(),
-    }).where(and(
-      eq(promptTemplates.id, input.template.id),
-      eq(promptTemplates.currentVersion, input.expectedVersion),
-    )).returning();
-    if (!updated) return null;
-    await tx.insert(templateVersions).values({
-      templateId: updated.id, version: updated.currentVersion,
-      snapshot: buildTemplateVersionSnapshot(updated, semantics.get(updated.id) ?? null),
-      source: 'admin', actorId: input.actorId,
-    });
-    await tx.insert(governanceAuditEvents).values({
-      actorType: 'admin', actorId: input.actorId,
-      eventType: `template.${input.status}`, targetType: 'template', targetId: updated.id,
-      payload: { idempotencyKey: input.idempotencyKey, version: updated.currentVersion },
-    });
-    return updated;
-  });
-}
 
 adminTemplateRoutes.post('/:id/publish', async (c) => {
   const action = versionedActionInput.safeParse(await c.req.json().catch(() => null));
@@ -492,8 +476,8 @@ adminTemplateRoutes.post('/:id/publish', async (c) => {
   if (!outputTerm?.enabled || assignedTerms.some((term) => !term.enabled)) {
     return fail(c, 'TAXONOMY_TERM_DISABLED', '模板使用了已停用的分类词', 409);
   }
-  const row = await writeLifecycleVersion({ template: existing, ...action.data, status: 'published', actorId: c.get('admin').sub });
-  return row ? ok(c, row) : fail(c, 'VERSION_CONFLICT', 'Template changed on the server', 409);
+  if (existing.currentVersion !== action.data.expectedVersion) return fail(c, 'VERSION_CONFLICT', 'Template changed on the server', 409);
+  return ok(c, await createLifecycleApproval({ template: existing, action: 'publish', actorId: c.get('admin').sub, idempotencyKey: action.data.idempotencyKey, semantic }), 202);
 });
 
 adminTemplateRoutes.post('/:id/archive', async (c) => {
@@ -501,8 +485,9 @@ adminTemplateRoutes.post('/:id/archive', async (c) => {
   if (!action.success) return fail(c, 'VALIDATION_ERROR', 'expectedVersion and idempotencyKey are required', 400);
   const [existing] = await getDb().select().from(promptTemplates).where(eq(promptTemplates.id, c.req.param('id'))).limit(1);
   if (!existing) return fail(c, 'NOT_FOUND', 'Template not found', 404);
-  const row = await writeLifecycleVersion({ template: existing, ...action.data, status: 'archived', actorId: c.get('admin').sub });
-  return row ? ok(c, row) : fail(c, 'VERSION_CONFLICT', 'Template changed on the server', 409);
+  if (existing.currentVersion !== action.data.expectedVersion) return fail(c, 'VERSION_CONFLICT', 'Template changed on the server', 409);
+  const semantics = await semanticViews([existing]);
+  return ok(c, await createLifecycleApproval({ template: existing, action: 'archive', actorId: c.get('admin').sub, idempotencyKey: action.data.idempotencyKey, semantic: semantics.get(existing.id)! }), 202);
 });
 
 adminTemplateRoutes.post('/:id/cover', async (c) => {

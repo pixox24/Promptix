@@ -44,6 +44,8 @@ export function buildTemplateVersionSnapshot(
 ): TemplateVersionSnapshot {
   const snapshot: Record<string, unknown> = {};
   for (const field of SNAPSHOT_FIELDS) snapshot[field] = template[field] ?? null;
+  snapshot.templateId = template.id;
+  snapshot.version = template.currentVersion;
   snapshot.semantic = semantic;
   return snapshot as TemplateVersionSnapshot;
 }

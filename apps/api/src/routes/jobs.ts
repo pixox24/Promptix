@@ -162,6 +162,7 @@ jobRoutes.get('/',async(c)=>{
 jobRoutes.post('/',async(c)=>{
   const parsed=jobInput.safeParse(await c.req.json().catch(()=>null));
   if(!parsed.success)return fail(c,'VALIDATION_ERROR',parsed.error.issues[0]?.message ?? 'Invalid job',400);
+  if (parsed.data.type.startsWith('template_governance_')) return fail(c, 'GOVERNANCE_JOB_RESTRICTED', 'Governance jobs must be created through governance endpoints', 403);
   if(parsed.data.type==='provider_test') return fail(c,'TEST_ROUTE_REQUIRED','Use the provider test endpoint to create provider_test jobs.',400);
   if(parsed.data.type==='text_expand' && typeof parsed.data.input.text!=='string') return fail(c,'TEXT_REQUIRED','input.text is required',400);
   const admin=c.get('admin');

@@ -350,7 +350,7 @@ function TemplateList() {
     });
     if (!confirmed) return;
     try {
-      await api(`/api/admin/templates/${template.id}`, { method: "DELETE" });
+      await api(`/api/admin/templates/${template.id}`, { method: "DELETE", body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }) });
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "模板永久删除失败");
@@ -569,12 +569,11 @@ function TemplateEditor() {
   async function publish() {
     if (!id) return;
     try {
-      const t = await api<Template>(`/api/admin/templates/${id}/publish`, {
+      await api<{ changeSetId: string; status: "awaiting_approval" }>(`/api/admin/templates/${id}/publish`, {
         method: "POST",
         body: JSON.stringify({ expectedVersion: existing?.currentVersion, idempotencyKey: crypto.randomUUID() }),
       });
-      setExisting(t);
-      setMessage("发布成功");
+      setMessage("发布请求已提交审批");
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "发布失败");
     }
