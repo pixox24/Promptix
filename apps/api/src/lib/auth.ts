@@ -74,3 +74,15 @@ export async function requireAdmin(c: Context<AdminVars>, next: Next) {
   c.set('admin', payload);
   await next();
 }
+
+/** High-impact governance changes require an owner account. */
+export async function requireOwner(c: Context<AdminVars>, next: Next) {
+  const token = getCookie(c, AUTH_COOKIE);
+  if (!token) return fail(c, 'UNAUTHORIZED', 'Authentication required', 401);
+  const payload = await verifyAdminToken(token);
+  if (!payload) return fail(c, 'UNAUTHORIZED', 'Invalid or expired session', 401);
+  const role = payload.role.toLowerCase();
+  if (role !== 'owner' && role !== 'admin') return fail(c, 'FORBIDDEN', '仅 owner 可执行此治理操作', 403);
+  c.set('admin', payload);
+  await next();
+}

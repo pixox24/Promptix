@@ -1,6 +1,6 @@
 import { Activity, Plus, Settings2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { GovernanceBulkBar } from '../../components/admin/governance/GovernanceBulkBar';
 import { GovernanceCommandBar } from '../../components/admin/governance/GovernanceCommandBar';
 import { GovernanceInspector } from '../../components/admin/governance/GovernanceInspector';
@@ -12,17 +12,19 @@ import { GovernanceRunStatusBar } from '../../components/admin/governance/Govern
 import { GovernanceStatePanel } from '../../components/admin/governance/GovernanceStatePanel';
 import { GovernanceTemplateTable } from '../../components/admin/governance/GovernanceTemplateTable';
 import { GovernanceToolbar } from '../../components/admin/governance/GovernanceToolbar';
-import { createGovernanceRun, fetchGovernanceRun } from '../../data/templateGovernanceApi';
+import { createGovernanceRun, fetchGovernanceRun, fetchGovernanceRunStats } from '../../data/templateGovernanceApi';
 import { useGovernanceRuns } from '../../hooks/useGovernanceRuns';
 import { useTemplateGovernance } from '../../hooks/useTemplateGovernance';
 import { useToast } from '../../context/ToastContext';
 
-export function TemplateGovernancePage() {
+export function TemplateGovernancePage({ canManage = false }: { canManage?: boolean }) {
   const [showRules, setShowRules] = useState(false);
   const [showRuns, setShowRuns] = useState(false);
   const [focusRequest, setFocusRequest] = useState(0);
   const controller = useTemplateGovernance();
   const runs = useGovernanceRuns(controller.refresh);
+  const [stats, setStats] = useState<Awaited<ReturnType<typeof fetchGovernanceRunStats>> | null>(null);
+  useEffect(() => { const abort = new AbortController(); fetchGovernanceRunStats(abort.signal).then(setStats).catch(() => undefined); return () => abort.abort(); }, [runs.runs.length]);
   const { toast } = useToast();
   const items = controller.page?.items ?? [];
   const total = controller.page?.total ?? 0;
@@ -65,9 +67,9 @@ export function TemplateGovernancePage() {
         <GovernancePagination hasCursor={Boolean(controller.state.cursor)} hasMore={Boolean(controller.page?.nextCursor)} onFirst={controller.firstPage} onNext={controller.nextPage}/>
         <GovernanceBulkBar selection={controller.selection} pageCount={items.length} total={total} onSelectAll={controller.selectAll} onGenerate={() => setFocusRequest((value) => value + 1)} onClear={() => controller.setSelection({ mode: 'explicit', templateIds: [], proposalIds: [] })}/>
       </main>
-      <GovernanceInspector detail={controller.detail}/>
+      <GovernanceInspector detail={controller.detail} canManage={canManage}/>
     </div>
-    {showRules && <GovernanceRulePanel onClose={() => setShowRules(false)}/>}
-    <GovernanceRunCenter open={showRuns} runs={runs.runs} detail={runs.detail} selectedId={runs.selectedId} loading={runs.loading} error={runs.error} onSelect={runs.selectRun} onRefresh={() => void runs.refresh()} onClose={() => setShowRuns(false)}/>
+    {showRules && <GovernanceRulePanel canManage={canManage} onClose={() => setShowRules(false)}/>}
+    <GovernanceRunCenter open={showRuns} runs={runs.runs} stats={stats} detail={runs.detail} selectedId={runs.selectedId} loading={runs.loading} error={runs.error} onSelect={runs.selectRun} onRefresh={() => void runs.refresh()} onClose={() => setShowRuns(false)}/>
   </div>;
 }

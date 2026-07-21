@@ -4,7 +4,7 @@ import { governanceRuleSetSchema, governanceSelectionScopeSchema, modelCapabilit
 import { z } from 'zod';
 import { getDb } from '../db/client.js';
 import { agentRuns, generationJobs, governanceApprovals, governanceAuditEvents, governanceChangeSetItems, governanceChangeSets, governanceProposals, governanceRuleSets, providerModels, providers } from '../db/schema.js';
-import { requireAdmin, type AdminVars } from '../lib/auth.js';
+import { requireAdmin, requireOwner, type AdminVars } from '../lib/auth.js';
 import { GovernanceQueryValidationError, parseGovernancePageQuery } from '../lib/governance-query.js';
 import { inspect_template, search_templates, submit_for_approval, validate_template } from '../lib/governance-tools.js';
 import { fail, ok } from '../lib/response.js';
@@ -109,7 +109,7 @@ governanceRoutes.get('/rule-sets/active', async (c) => {
   return rules ? ok(c, { ...rules, scheduler: governanceSchedulerStatus() }) : fail(c, 'NOT_FOUND', 'Active governance rules not found', 404);
 });
 
-governanceRoutes.put('/rule-sets/active', async (c) => {
+governanceRoutes.put('/rule-sets/active', requireOwner, async (c) => {
   const parsed = governanceRuleSetSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid rules', 400);
   const rules = await service().updateRules({ rules: parsed.data, actorId: c.get('admin').sub });
@@ -129,7 +129,7 @@ governanceRoutes.get('/agent-config', async (c) => {
   });
 });
 
-governanceRoutes.put('/agent-config', async (c) => {
+governanceRoutes.put('/agent-config', requireOwner, async (c) => {
   const parsed = agentConfigInput.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid Agent config', 400);
   const [active] = await getDb().select().from(governanceRuleSets).where(eq(governanceRuleSets.enabled, true)).limit(1);
@@ -145,10 +145,10 @@ governanceRoutes.put('/agent-config', async (c) => {
   return ok(c, { config: saved.rules.agent, version: saved.version, scheduler });
 });
 
-governanceRoutes.post('/change-sets/:id/approve', async (c) => {
+governanceRoutes.post('/change-sets/:id/approve', requireOwner, async (c) => {
   const parsed = actionInput.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid approval', 400);
-  try { return ok(c, await service().approve({ changeSetId: c.req.param('id'), reviewerId: c.get('admin').sub, ...parsed.data }), 202); }
+  try { return ok(c, await service().approve({ changeSetId: c.req.param('id')!, reviewerId: c.get('admin').sub, ...parsed.data }), 202); }
   catch (error) { return stateFailure(c, error); }
 });
 
@@ -175,24 +175,24 @@ governanceRoutes.post('/change-sets/:id/submit', async (c) => {
   return result ? ok(c, result) : fail(c, 'INVALID_CHANGE_SET_STATE', 'Only planned change sets can be submitted', 409);
 });
 
-governanceRoutes.post('/change-sets/:id/reject', async (c) => {
+governanceRoutes.post('/change-sets/:id/reject', requireOwner, async (c) => {
   const parsed = actionInput.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid rejection', 400);
-  try { return ok(c, await service().reject({ changeSetId: c.req.param('id'), reviewerId: c.get('admin').sub, note: parsed.data.note, idempotencyKey: parsed.data.idempotencyKey })); }
+  try { return ok(c, await service().reject({ changeSetId: c.req.param('id')!, reviewerId: c.get('admin').sub, note: parsed.data.note, idempotencyKey: parsed.data.idempotencyKey })); }
   catch (error) { return stateFailure(c, error); }
 });
 
-governanceRoutes.post('/change-sets/:id/retry', async (c) => {
+governanceRoutes.post('/change-sets/:id/retry', requireOwner, async (c) => {
   const parsed = actionInput.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid retry', 400);
-  try { return ok(c, await service().retry({ changeSetId: c.req.param('id'), idempotencyKey: parsed.data.idempotencyKey }), 202); }
+  try { return ok(c, await service().retry({ changeSetId: c.req.param('id')!, idempotencyKey: parsed.data.idempotencyKey }), 202); }
   catch (error) { return stateFailure(c, error); }
 });
 
-governanceRoutes.post('/change-sets/:id/rollback', async (c) => {
+governanceRoutes.post('/change-sets/:id/rollback', requireOwner, async (c) => {
   const parsed = actionInput.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid rollback', 400);
-  try { return ok(c, await service().rollback({ changeSetId: c.req.param('id'), idempotencyKey: parsed.data.idempotencyKey }), 202); }
+  try { return ok(c, await service().rollback({ changeSetId: c.req.param('id')!, idempotencyKey: parsed.data.idempotencyKey }), 202); }
   catch (error) { return stateFailure(c, error); }
 });
 
@@ -204,6 +204,24 @@ governanceRoutes.get('/runs', async (c) => {
     .where(parsed.data.status ? eq(agentRuns.status, parsed.data.status) : undefined)
     .orderBy(desc(agentRuns.createdAt)).limit(parsed.data.limit);
   return ok(c, { items: rows.map(({ run, modelName, modelIdentifier }) => ({ ...run, model: run.modelId ? { id: run.modelId, name: modelName, modelId: modelIdentifier } : null })) });
+});
+
+governanceRoutes.get('/runs/stats', async (c) => {
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const [summary] = await getDb().select({
+    total: sql<number>`count(*)::int`,
+    succeeded: sql<number>`count(*) filter (where ${agentRuns.status} = 'succeeded')::int`,
+    failed: sql<number>`count(*) filter (where ${agentRuns.status} = 'failed')::int`,
+    awaitingApproval: sql<number>`count(*) filter (where ${agentRuns.status} = 'awaiting_approval')::int`,
+    partiallySucceeded: sql<number>`count(*) filter (where ${agentRuns.status} = 'partially_succeeded')::int`,
+    avgDurationMs: sql<number>`coalesce(avg(extract(epoch from (${agentRuns.finishedAt} - ${agentRuns.startedAt})) * 1000) filter (where ${agentRuns.finishedAt} is not null and ${agentRuns.startedAt} is not null), 0)::int`,
+  }).from(agentRuns).where(sql`${agentRuns.createdAt} >= ${since}`);
+  const [audit] = await getDb().select({
+    applied: sql<number>`count(*) filter (where ${governanceAuditEvents.eventType} = 'governance.template_applied')::int`,
+    rolledBack: sql<number>`count(*) filter (where ${governanceAuditEvents.eventType} = 'governance.template_rolled_back')::int`,
+    deleted: sql<number>`count(*) filter (where ${governanceAuditEvents.eventType} = 'governance.template_deleted')::int`,
+  }).from(governanceAuditEvents).where(sql`${governanceAuditEvents.createdAt} >= ${since}`);
+  return ok(c, { windowDays: 30, ...summary, ...audit, successRate: summary.total ? Math.round((summary.succeeded / summary.total) * 100) : 0 });
 });
 
 governanceRoutes.get('/runs/:id', async (c) => {

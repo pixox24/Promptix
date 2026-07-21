@@ -58,6 +58,7 @@ export type GovernanceRunDetail = GovernanceRunSummary & {
   changeSets: GovernanceChangeSetSummary[];
   audits: GovernanceAuditEvent[];
 };
+export type GovernanceRunStats = { windowDays: number; total: number; succeeded: number; failed: number; awaitingApproval: number; partiallySucceeded: number; avgDurationMs: number; applied: number; rolledBack: number; deleted: number; successRate: number };
 
 export type GovernanceChangeSetPreview = {
   changeSet: GovernanceChangeSetSummary;

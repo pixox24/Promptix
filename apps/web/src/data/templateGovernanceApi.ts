@@ -1,5 +1,5 @@
 import { api } from '../lib/api';
-import type { GovernanceActiveRules, GovernanceChangeSetPreview, GovernanceQueueCount, GovernanceRunDetail, GovernanceRunSummary, GovernanceTemplateDetail, GovernanceTemplatePage } from '../types/templateGovernance';
+import type { GovernanceActiveRules, GovernanceChangeSetPreview, GovernanceQueueCount, GovernanceRunDetail, GovernanceRunStats, GovernanceRunSummary, GovernanceTemplateDetail, GovernanceTemplatePage } from '../types/templateGovernance';
 import type { GovernanceRuleSet } from '@promptix/shared';
 
 export type GovernanceAgentConfig = { modelId: string | null; promptVersion: string; systemPrompt: string };
@@ -10,6 +10,7 @@ export const fetchGovernanceTemplates = (params: URLSearchParams, signal?: Abort
 export const fetchGovernanceTemplate = (id: string, signal?: AbortSignal) => api<GovernanceTemplateDetail>(`/api/admin/governance/templates/${encodeURIComponent(id)}`, { signal });
 export const createGovernanceRun = (input: unknown) => api<{ id: string; status: string }>('/api/admin/governance/runs', { method: 'POST', body: JSON.stringify(input) });
 export const fetchGovernanceRuns = (signal?: AbortSignal) => api<{ items: GovernanceRunSummary[] }>('/api/admin/governance/runs?limit=50', { signal });
+export const fetchGovernanceRunStats = (signal?: AbortSignal) => api<GovernanceRunStats>('/api/admin/governance/runs/stats', { signal });
 export const fetchGovernanceRun = (id: string, signal?: AbortSignal) => api<GovernanceRunDetail>(`/api/admin/governance/runs/${encodeURIComponent(id)}`, { signal });
 export const fetchGovernanceChangeSetPreview = (id: string, signal?: AbortSignal) => api<GovernanceChangeSetPreview>(`/api/admin/governance/change-sets/${encodeURIComponent(id)}/preview`, { signal });
 export const fetchActiveGovernanceRules = () => api<GovernanceActiveRules>('/api/admin/governance/rule-sets/active');

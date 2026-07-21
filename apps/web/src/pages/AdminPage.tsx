@@ -215,6 +215,7 @@ function AdminShell({
   admin: Admin;
   onLogout: () => void;
 }) {
+  const canManageGovernance = ['owner', 'admin'].includes(admin.role.toLowerCase());
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
       <header className="border-b bg-slate-950 text-white">
@@ -244,14 +245,14 @@ function AdminShell({
       <main className="mx-auto max-w-[1500px] p-5 md:p-8">
         <Suspense fallback={<div className="grid min-h-64 place-items-center text-sm text-slate-500">正在加载后台模块…</div>}><Routes>
           <Route index element={<Navigate to="templates" replace />} />
-          <Route path="templates" element={<TemplateGovernancePage />} />
+          <Route path="templates" element={<TemplateGovernancePage canManage={canManageGovernance} />} />
           <Route path="templates/new" element={<TemplateEditor />} />
           <Route path="templates/:id" element={<TemplateEditor />} />
           <Route path="ingest" element={<IngestPage />} />
           <Route path="taxonomy" element={<TaxonomyPage />} />
           <Route path="jobs" element={<Jobs />} />
           <Route path="providers" element={<ProviderModelsPage />} />
-          <Route path="agent" element={<AgentSettingsPage />} />
+          <Route path="agent" element={<AgentSettingsPage canManage={canManageGovernance} />} />
           <Route path="*" element={<Navigate to="templates" replace />} />
         </Routes></Suspense>
       </main>
