@@ -15,4 +15,5 @@ test('public template API filters the semantic taxonomy before pagination', asyn
   assert.match(source, /INVALID_CATEGORY/);
   assert.match(source, /requestedPage < 1/);
   assert.match(source, /requestedPageSize > 100/);
+  assert.match(source, /requestedSort === 'relevance' && !q \? 'hot' : requestedSort/);
 });

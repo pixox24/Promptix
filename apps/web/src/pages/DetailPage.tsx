@@ -6,7 +6,6 @@ import type { PromptTemplate } from '../types/prompt';
 import { useLibrary } from '../context/UserLibraryContext';
 import { useToast } from '../context/ToastContext';
 import { EmptyState } from '../components/ui/EmptyState';
-import { TemplateGrid } from '../components/template/TemplateGrid';
 import { PromptStudioDetail } from '../components/detail/PromptStudioDetail';
 
 export function DetailPage() {
@@ -20,5 +19,5 @@ export function DetailPage() {
   if(!template)return <div className="mx-auto max-w-6xl px-4 py-16"><EmptyState title="模板不存在" description="该模板可能已被移除，或链接不正确。" actionLabel="返回模板库" actionTo="/library"/></div>;
   const similar=getSimilarTemplates(template,4);
   const favorite=library.isFavorite(template.id);
-  return <main className="mx-auto max-w-[1440px] px-4 pb-12 pt-4 md:px-8"><PromptStudioDetail template={template} initialDraft={initialDraft} favorite={favorite} drafts={library.listDraftsForTemplate(template.id)} onFavorite={()=>{library.toggleFavorite(template.id);toast(favorite?'已取消收藏':'已收藏模板')}} onSaveDraft={library.saveDraft} onDeleteDraft={draftId=>{library.deleteDraft(draftId);toast('草稿已删除','info')}} onToast={toast}/>{similar.length>0&&<section className="mt-12"><h2 className="mb-4 text-base font-semibold text-slate-800">相似模板</h2><TemplateGrid templates={similar}/></section>}</main>;
+  return <main className="mx-auto max-w-[2240px] px-4 pb-12 pt-4 md:px-8"><PromptStudioDetail template={template} similarTemplates={similar} initialDraft={initialDraft} favorite={favorite} drafts={library.listDraftsForTemplate(template.id)} onFavorite={()=>{library.toggleFavorite(template.id);toast(favorite?'已取消收藏':'已收藏模板')}} onSaveDraft={library.saveDraft} onDeleteDraft={draftId=>{library.deleteDraft(draftId);toast('草稿已删除','info')}} onToast={toast}/></main>;
 }

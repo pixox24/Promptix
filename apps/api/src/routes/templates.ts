@@ -138,8 +138,9 @@ publicTemplateRoutes.get('/', async (c) => {
   const allSlugs = [...(outputType ? [outputType] : []), ...scenarios, ...styles, ...subjects];
   if (allSlugs.some((slug) => !taxonomySlugSchema.safeParse(slug).success)) return fail(c, 'INVALID_TAXONOMY_FILTER', 'Invalid taxonomy filter', 400);
   const allowedSorts = new Set(['relevance', 'hot', 'featured', 'latest', 'favorites']);
-  const sort = c.req.query('sort') ?? (q ? 'relevance' : 'hot');
-  if (!allowedSorts.has(sort)) return fail(c, 'INVALID_SORT', 'Invalid sort option', 400);
+  const requestedSort = c.req.query('sort') ?? (q ? 'relevance' : 'hot');
+  if (!allowedSorts.has(requestedSort)) return fail(c, 'INVALID_SORT', 'Invalid sort option', 400);
+  const sort = requestedSort === 'relevance' && !q ? 'hot' : requestedSort;
   const requestedPage = Number(c.req.query('page') ?? 1);
   const requestedPageSize = Number(c.req.query('pageSize') ?? 24);
   if (!Number.isInteger(requestedPage) || requestedPage < 1 || !Number.isInteger(requestedPageSize) || requestedPageSize < 1 || requestedPageSize > 100) {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useReducer } from 'react';
 import { buildPrompt, getDefaultValues } from '../utils/promptBuilder';
 import type { PromptTemplate, SavedDraft } from '../types/prompt';
+import { createPromptStudioDirtySignature, type PromptStudioEditableSnapshot } from '../lib/promptStudioDirtyState';
 
 export interface DisplayedImage {
   kind: 'cover' | 'generated';
@@ -16,6 +17,7 @@ interface State {
   manualPrompt: string;
   activeDraftId: string | null;
   displayedImage: DisplayedImage;
+  baselineSignature: string;
 }
 
 type Action =
@@ -30,15 +32,19 @@ type Action =
 
 function initial(template: PromptTemplate, draft?: SavedDraft): State {
   const values = draft?.values ?? getDefaultValues(template);
-  return {
+  const editable: PromptStudioEditableSnapshot = {
     values,
-    errors: {},
     promptMode: draft?.promptMode ?? 'auto',
     manualPrompt: draft?.manualPrompt ?? draft?.prompt ?? buildPrompt(template, values),
-    activeDraftId: draft?.id ?? null,
     displayedImage: draft?.generatedImage
       ? { kind: 'generated', ...draft.generatedImage }
       : { kind: 'cover', url: template.coverImage },
+  };
+  return {
+    ...editable,
+    errors: {},
+    activeDraftId: draft?.id ?? null,
+    baselineSignature: createPromptStudioDirtySignature(editable),
   };
 }
 
@@ -49,7 +55,7 @@ function reducer(state: State, action: Action): State {
     case 'errors': return { ...state, errors: action.errors };
     case 'manual': return { ...state, promptMode: 'manual', manualPrompt: action.prompt };
     case 'auto': return { ...state, promptMode: 'auto' };
-    case 'draftSaved': return { ...state, activeDraftId: action.id };
+    case 'draftSaved': return { ...state, activeDraftId: action.id, baselineSignature: createPromptStudioDirtySignature(state) };
     case 'generated': return { ...state, displayedImage: { kind: 'generated', ...action.image } };
     case 'reset': return initial(action.template);
   }
@@ -59,5 +65,6 @@ export function usePromptStudioState(template: PromptTemplate, draft?: SavedDraf
   const [state, dispatch] = useReducer(reducer, initial(template, draft));
   useEffect(() => dispatch({ type: 'initialize', template, draft }), [template, draft]);
   const autoPrompt = useMemo(() => buildPrompt(template, state.values), [template, state.values]);
-  return { state, dispatch, prompt: state.promptMode === 'manual' ? state.manualPrompt : autoPrompt };
+  const isDirty = createPromptStudioDirtySignature(state) !== state.baselineSignature;
+  return { state, dispatch, prompt: state.promptMode === 'manual' ? state.manualPrompt : autoPrompt, isDirty };
 }

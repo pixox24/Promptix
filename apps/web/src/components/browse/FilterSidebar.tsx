@@ -8,6 +8,7 @@ import {
 import type { SortOption } from '../../types/prompt';
 import { TEMPLATE_USE_SCENARIOS } from '@promptix/shared';
 import type { TaxonomyTerm } from '../../data/taxonomyApi';
+import { StableSearchInput } from './StableSearchInput';
 
 export const useScenarios = TEMPLATE_USE_SCENARIOS;
 
@@ -46,16 +47,21 @@ const sortItems: {
   label: string;
   icon: typeof IconFlame;
 }[] = [
-  { id: 'relevance', label: '相关', icon: IconSearch },
+  { id: 'relevance', label: '最相关', icon: IconSearch },
   { id: 'hot', label: '热门', icon: IconFlame },
   { id: 'featured', label: '精选', icon: IconSpark },
   { id: 'favorites', label: '高赞', icon: IconTrophy },
   { id: 'latest', label: '最新', icon: IconClock },
 ];
 
+function visibleSortItems(hasQuery: boolean) {
+  return hasQuery ? sortItems : sortItems.filter((item) => item.id !== 'relevance');
+}
+
 interface FilterSidebarProps {
   query: string;
   onQueryChange: (q: string) => void;
+  hasQuery: boolean;
   sort: SortOption;
   onSortChange: (s: SortOption) => void;
   taxonomyTerms: TaxonomyTerm[];
@@ -107,6 +113,7 @@ function TermTags({ terms, selected, onToggle }: { terms: TaxonomyTerm[]; select
 export function FilterSidebar({
   query,
   onQueryChange,
+  hasQuery,
   sort,
   onSortChange,
   taxonomyTerms,
@@ -119,6 +126,7 @@ export function FilterSidebar({
   onClearTaxonomy,
 }: FilterSidebarProps) {
   const termsFor = (dimension: TaxonomyTerm['dimension']) => taxonomyTerms.filter((term) => term.dimension === dimension);
+  const availableSortItems = visibleSortItems(hasQuery);
   return (
     <aside className="sticky top-[4.5rem] z-20 hidden h-[calc(100vh-6rem)] w-[17.5rem] shrink-0 md:block">
       {/* Glass shell */}
@@ -153,10 +161,9 @@ export function FilterSidebar({
               size={16}
               className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-foreground/35"
             />
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => onQueryChange(e.target.value)}
+            <StableSearchInput
+              query={query}
+              onQueryChange={onQueryChange}
               placeholder="搜索标题、描述、提示词..."
               className="h-11 w-full rounded-xl border border-white/60 bg-white/55 py-2 pl-10 pr-3.5 text-[13px] text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] outline-none backdrop-blur-md transition-all placeholder:text-foreground/35 focus:border-primary/50 focus:bg-white/75 focus:ring-[3px] focus:ring-primary/20"
             />
@@ -170,7 +177,7 @@ export function FilterSidebar({
             <section>
               <SectionTitle>排序</SectionTitle>
               <nav className="flex flex-col gap-1">
-                {sortItems.map((item) => {
+                {availableSortItems.map((item) => {
                   const Icon = item.icon;
                   const active = sort === item.id;
                   return (
@@ -261,6 +268,7 @@ export function FilterSidebar({
 export function MobileFilterBar({
   query,
   onQueryChange,
+  hasQuery,
   sort,
   onSortChange,
   taxonomyTerms,
@@ -278,6 +286,7 @@ export function MobileFilterBar({
   onOpenChange: (v: boolean) => void;
 }) {
   const termsFor = (dimension: TaxonomyTerm['dimension']) => taxonomyTerms.filter((term) => term.dimension === dimension);
+  const availableSortItems = visibleSortItems(hasQuery);
   const selectedCount = scenarios.length + styles.length + subjects.length + (outputType ? 1 : 0);
   return (
     <div className="sticky top-14 z-30 w-full py-2 md:hidden">
@@ -298,7 +307,7 @@ export function MobileFilterBar({
           )}
         </span>
         <span className="text-xs text-foreground/45">
-          {sortItems.find((item) => item.id === sort)?.label ?? '热门'}
+          {availableSortItems.find((item) => item.id === sort)?.label ?? '热门'}
         </span>
       </button>
 
@@ -314,10 +323,9 @@ export function MobileFilterBar({
               size={16}
               className="absolute left-3.5 top-1/2 -translate-y-1/2 text-foreground/35"
             />
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => onQueryChange(e.target.value)}
+            <StableSearchInput
+              query={query}
+              onQueryChange={onQueryChange}
               placeholder="搜索标题、描述、提示词..."
               className="flex h-11 w-full rounded-xl border border-white/60 bg-white/55 py-1 pl-10 pr-3 text-sm outline-none backdrop-blur-md"
             />
@@ -325,8 +333,8 @@ export function MobileFilterBar({
 
           <div>
             <SectionTitle>排序</SectionTitle>
-            <div className="flex gap-2">
-              {sortItems.map((item) => (
+            <div className="grid grid-cols-2 gap-2">
+              {availableSortItems.map((item) => (
                 <button
                   key={item.id}
                   type="button"

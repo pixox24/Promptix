@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { desc, eq, inArray } from 'drizzle-orm';
-import { governanceRuleSetSchema, governanceSelectionScopeSchema, modelCapabilitySchema, type GovernanceQueueId } from '@promptix/shared';
+import { governanceRuleSetSchema, governanceSelectionScopeSchema, modelCapabilitySchema, templateVersionSnapshotSchema, type GovernanceQueueId, type GovernanceTemplateQuery } from '@promptix/shared';
 import { z } from 'zod';
 import { getDb } from '../db/client.js';
-import { agentRuns, generationJobs, governanceApprovals, governanceChangeSetItems, governanceChangeSets, governanceProposals, governanceRuleSets, providerModels, providers } from '../db/schema.js';
+import { agentRuns, generationJobs, governanceApprovals, governanceChangeSetItems, governanceChangeSets, governanceProposals, governanceRuleSets, providerModels, providers, taxonomyTerms } from '../db/schema.js';
 import { requireAdmin, type AdminVars } from '../lib/auth.js';
 import { GovernanceQueryValidationError, parseGovernancePageQuery } from '../lib/governance-query.js';
 import { inspect_template, search_templates, submit_for_approval, validate_template } from '../lib/governance-tools.js';
@@ -31,6 +31,22 @@ function service() {
         const selected = rows.find((row) => row.model.enabled && row.provider.enabled && modelCapabilitySchema.array().parse(row.model.capabilities).includes('structured_output'));
         if (!selected) throw new Error('No enabled structured-output text model');
         modelId = selected.model.id; providerId = selected.provider.id;
+        const [run] = await getDb().select().from(agentRuns).where(eq(agentRuns.id, targetId)).limit(1);
+        if (!run) throw new Error('Agent run not found');
+        const [ruleSet] = await getDb().select().from(governanceRuleSets).where(eq(governanceRuleSets.id, run.ruleSetId)).limit(1);
+        if (!ruleSet) throw new Error('Governance rules not found');
+        const scope = governanceSelectionScopeSchema.parse(run.scope);
+        const templateIds = scope.mode === 'explicit'
+          ? scope.templateIds
+          : (await search_templates({ query: scope.query as GovernanceTemplateQuery, pageSize: governanceRuleSetSchema.parse(ruleSet.rules).schedule.scanLimit })).items.map((item) => item.id).filter((id) => !scope.exclusions.includes(id));
+        const snapshots = (await Promise.all(templateIds.map(async (templateId) => (await inspect_template({ templateId }))?.currentSnapshot)))
+          .map((snapshot) => templateVersionSnapshotSchema.parse(snapshot));
+        const taxonomyCatalog = await getDb().select({ slug: taxonomyTerms.slug }).from(taxonomyTerms).where(eq(taxonomyTerms.enabled, true));
+        const [job] = await getDb().insert(generationJobs).values({ type, status: 'pending', actorId: run.requestedBy, modelId, providerId, input: { targetId, snapshots, taxonomyCatalog, rules: ruleSet.rules, signals: [] } }).returning();
+        await getDb().update(agentRuns).set({ status: 'analyzing', modelId, startedAt: new Date() }).where(eq(agentRuns.id, run.id));
+        try { await enqueueGenerationJob(job.id); }
+        catch (error) { await getDb().update(generationJobs).set({ status: 'failed', errorCode: 'QUEUE_UNAVAILABLE', errorMessage: error instanceof Error ? error.message : 'Queue unavailable', finishedAt: new Date() }).where(eq(generationJobs.id, job.id)); throw error; }
+        return;
       }
       const [job] = await getDb().insert(generationJobs).values({ type, status: 'pending', modelId, providerId, input: { targetId } }).returning();
       try { await enqueueGenerationJob(job.id); }

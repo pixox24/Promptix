@@ -8,9 +8,10 @@ export function HomePage() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const sidebarProps = {
     query: browse.query,
-    onQueryChange: (q: string) => browse.update({ q: q || null }),
+    onQueryChange: browse.setQuery,
+    hasQuery: browse.hasQuery,
     sort: browse.sort,
-    onSortChange: (sort: typeof browse.sort) => browse.update({ sort: sort === (browse.query ? 'relevance' : 'hot') ? null : sort }),
+    onSortChange: browse.setSort,
     taxonomyTerms: browse.taxonomyTerms,
     outputType: browse.outputType,
     onOutputTypeChange: (value: string) => browse.update({ outputType: value || null }),

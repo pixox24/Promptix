@@ -1,12 +1,10 @@
 import { useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Heart, LoaderCircle } from 'lucide-react';
-import { parseAspectRatio } from '@promptix/shared';
 import type { PromptTemplate } from '../../types/prompt';
 import type { DisplayedImage } from '../../hooks/usePromptStudioState';
 
 export function MediaCard({ template, image, ratio, favorite, busy, error, onFavorite }: { template: PromptTemplate; image: DisplayedImage; ratio: string; favorite: boolean; busy: boolean; error: string; onFavorite: () => void }) {
-  const parsed = image.width && image.height ? { width: image.width, height: image.height } : parseAspectRatio(ratio) ?? { width: 1, height: 1 };
   const favoriteBaseline = useRef({ templateId: template.id, favorite });
   if (favoriteBaseline.current.templateId !== template.id) favoriteBaseline.current = { templateId: template.id, favorite };
   const [plusOneKey, setPlusOneKey] = useState(0);
@@ -18,9 +16,7 @@ export function MediaCard({ template, image, ratio, favorite, busy, error, onFav
 
   return <section className="media-card flex flex-col gap-4 rounded-lg border border-slate-100 bg-white p-4 sm:p-5 lg:p-6" data-testid="media-card">
     <div className="media-stage relative flex items-center justify-center overflow-hidden rounded-lg border border-slate-100 bg-slate-50 p-2" data-testid="media-stage">
-      <motion.div className="relative max-h-full max-w-full overflow-hidden rounded-md bg-slate-900 shadow-sm" animate={{ aspectRatio: parsed.width / parsed.height }} transition={{ type: 'spring', stiffness: 260, damping: 30 }} style={parsed.width >= parsed.height ? { width: '100%' } : { height: '100%' }}>
-        <AnimatePresence mode="wait"><motion.img key={image.url} src={image.url} alt={template.name} className="h-full w-full object-cover" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} /></AnimatePresence>
-      </motion.div>
+      <AnimatePresence mode="wait"><motion.img key={image.url} src={image.url} alt={template.name} data-ratio={ratio} className="media-stage-image rounded-md bg-slate-900 object-contain shadow-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} /></AnimatePresence>
       {busy && <div className="absolute inset-0 grid place-items-center bg-white/75 backdrop-blur-sm"><div className="flex items-center gap-2 text-sm font-medium text-slate-700"><LoaderCircle className="animate-spin" size={18} />正在生成</div></div>}
       {error && <div role="alert" className="absolute inset-x-4 bottom-4 rounded-md bg-red-950/90 px-3 py-2 text-xs text-white">{error}</div>}
     </div>

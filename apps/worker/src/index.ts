@@ -18,6 +18,9 @@ const {
 const { persistGeneratedOutput } = await import('./generated-media.js');
 const { runImageReversePipeline } = await import('./image-reverse-pipeline.js');
 const { IngestPipelineError } = await import('./job-errors.js');
+const { persistGovernancePlan } = await import('./governance-plan-persistence.js');
+const { executeGovernanceJob, rollbackGovernanceJob } = await import('./governance-job-execution.js');
+const { buildScheduledGovernanceInput } = await import('./scheduled-governance.js');
 
 const QUEUE_NAME='promptix-jobs';
 type WorkerPayload = { jobId: string } | { kind: 'governance_schedule'; ruleSetId: string; ruleSetVersion: number };
@@ -26,7 +29,11 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
     const [rules] = await db.select().from(governanceRuleSets).where(eq(governanceRuleSets.id, job.data.ruleSetId)).limit(1);
     if (!rules || !rules.enabled || rules.version !== job.data.ruleSetVersion) return { skipped: true, reason: 'RULE_SET_CHANGED' };
     const [run] = await db.insert(agentRuns).values({ trigger: 'scheduled', goal: '定时模板治理巡检', scope: { mode: 'query', query: { scenarios: [], styles: [], subjects: [], sort: 'updated_desc' }, exclusions: [], snapshotAt: new Date().toISOString(), schedulerJobId: job.id }, promptVersion: 'template-governance-v1', ruleSetId: rules.id, ruleSetVersion: rules.version, status: 'queued' }).returning();
-    return { runId: run.id, status: run.status };
+    const model = await resolvePrimaryModel('template_governance_plan', null, null);
+    const input = await buildScheduledGovernanceInput(rules.rules);
+    const proposals = await generateGovernanceProposals(model, input);
+    const persisted = await persistGovernancePlan(run.id, proposals);
+    return { runId: run.id, status: 'planned', persisted };
   }
   const jobId = job.data.jobId;
   const [record]=await db.select().from(generationJobs).where(eq(generationJobs.id,jobId)).limit(1);
@@ -34,9 +41,13 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
   await db.update(generationJobs).set({status:'running',attempts:record.attempts+1,startedAt:new Date(),finishedAt:null,errorMessage:null,errorCode:null,errorDetails:null}).where(eq(generationJobs.id,record.id));
   try{
     let output:unknown;
-    if(record.type==='noop' || record.type === 'template_governance_apply' || record.type === 'template_governance_rollback'){
+    if(record.type==='noop'){
       if((record.input as {fail?:boolean}).fail)throw new Error('Intentional noop failure');
       output={ok:true,processedAt:new Date().toISOString(),operation:record.type};
+    } else if (record.type === 'template_governance_apply' || record.type === 'template_governance_rollback') {
+      const targetId = (record.input as { targetId?: unknown }).targetId;
+      if (typeof targetId !== 'string') throw new Error('Governance execution job is missing targetId');
+      output = record.type === 'template_governance_apply' ? await executeGovernanceJob(targetId) : await rollbackGovernanceJob(targetId);
     }else{
       const jobType = jobTypeSchema.parse(record.type);
       const recordInput = effectiveIngestJobInput(jobType, record.input as Record<string, unknown>);
@@ -57,7 +68,11 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
       if (jobType === 'provider_test') {
         output = await runProviderTextTest(primary);
       } else if (jobType === 'template_governance_plan') {
-        output = await generateGovernanceProposals(primary, record.input as Record<string, unknown>);
+        const proposals = await generateGovernanceProposals(primary, record.input as Record<string, unknown>);
+        const targetId = (record.input as { targetId?: unknown }).targetId;
+        if (typeof targetId !== 'string') throw new Error('Governance plan job is missing targetId');
+        const persisted = await persistGovernancePlan(targetId, proposals);
+        output = { proposals, persisted };
       } else if (jobType === 'image_generate') {
         output = await generateImage(primary, record.input as Record<string, unknown>);
         output = await persistGeneratedOutput(record.id, record.templateId, output);
