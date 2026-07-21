@@ -4,7 +4,7 @@ import { jobTypeSchema } from '@promptix/shared';
 import { loadEnvFile, redisConnection } from './env.js';
 import { effectiveIngestJobInput } from './ingest-job-input.js';
 loadEnvFile();
-const { db, generationJobs } = await import('./db.js');
+const { db, generationJobs, agentRuns, governanceRuleSets } = await import('./db.js');
 const { generateImage, structurePromptDetailed } = await import('./adapters.js');
 const { generateGovernanceProposals } = await import('./ai-adapters.js');
 const { runProviderTextTest } = await import('./provider-text-test.js');
@@ -20,9 +20,17 @@ const { runImageReversePipeline } = await import('./image-reverse-pipeline.js');
 const { IngestPipelineError } = await import('./job-errors.js');
 
 const QUEUE_NAME='promptix-jobs';
-const worker=new Worker(QUEUE_NAME,async(job:Job<{jobId:string}>)=>{
-  const [record]=await db.select().from(generationJobs).where(eq(generationJobs.id,job.data.jobId)).limit(1);
-  if(!record)throw new Error(`Job ${job.data.jobId} not found`);
+type WorkerPayload = { jobId: string } | { kind: 'governance_schedule'; ruleSetId: string; ruleSetVersion: number };
+const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
+  if (!('jobId' in job.data)) {
+    const [rules] = await db.select().from(governanceRuleSets).where(eq(governanceRuleSets.id, job.data.ruleSetId)).limit(1);
+    if (!rules || !rules.enabled || rules.version !== job.data.ruleSetVersion) return { skipped: true, reason: 'RULE_SET_CHANGED' };
+    const [run] = await db.insert(agentRuns).values({ trigger: 'scheduled', goal: '定时模板治理巡检', scope: { mode: 'query', query: { scenarios: [], styles: [], subjects: [], sort: 'updated_desc' }, exclusions: [], snapshotAt: new Date().toISOString(), schedulerJobId: job.id }, promptVersion: 'template-governance-v1', ruleSetId: rules.id, ruleSetVersion: rules.version, status: 'queued' }).returning();
+    return { runId: run.id, status: run.status };
+  }
+  const jobId = job.data.jobId;
+  const [record]=await db.select().from(generationJobs).where(eq(generationJobs.id,jobId)).limit(1);
+  if(!record)throw new Error(`Job ${jobId} not found`);
   await db.update(generationJobs).set({status:'running',attempts:record.attempts+1,startedAt:new Date(),finishedAt:null,errorMessage:null,errorCode:null,errorDetails:null}).where(eq(generationJobs.id,record.id));
   try{
     let output:unknown;

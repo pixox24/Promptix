@@ -17,6 +17,7 @@ import { adminTaxonomyRoutes, publicTaxonomyRoutes } from './routes/taxonomy.js'
 import { mkdirSync } from 'node:fs';
 import { localStorageRoot } from './lib/storage.js';
 import path from 'node:path';
+import { registerGovernanceScheduler } from './lib/governance-scheduler.js';
 
 loadEnvFile();
 
@@ -85,6 +86,7 @@ function start() {
   serve({ fetch: app.fetch, port }, (info) => {
     console.log(`[api] listening on http://localhost:${info.port}`);
   });
+  void registerGovernanceScheduler();
 }
 
 start();

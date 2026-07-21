@@ -11,6 +11,7 @@ import { fail, ok } from '../lib/response.js';
 import { createGovernanceRepository } from '../lib/governance-repository.js';
 import { GovernanceService, GovernanceStateError } from '../lib/governance-service.js';
 import { enqueueGenerationJob } from '../lib/job-enqueue.js';
+import { governanceSchedulerStatus, registerGovernanceScheduler } from '../lib/governance-scheduler.js';
 
 const commandInput = z.object({
   goal: z.string().trim().min(1).max(2_000),
@@ -88,13 +89,15 @@ governanceRoutes.post('/runs', async (c) => {
 
 governanceRoutes.get('/rule-sets/active', async (c) => {
   const [rules] = await getDb().select().from(governanceRuleSets).where(eq(governanceRuleSets.enabled, true)).limit(1);
-  return rules ? ok(c, rules) : fail(c, 'NOT_FOUND', 'Active governance rules not found', 404);
+  return rules ? ok(c, { ...rules, scheduler: governanceSchedulerStatus() }) : fail(c, 'NOT_FOUND', 'Active governance rules not found', 404);
 });
 
 governanceRoutes.put('/rule-sets/active', async (c) => {
   const parsed = governanceRuleSetSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid rules', 400);
-  return ok(c, await service().updateRules({ rules: parsed.data, actorId: c.get('admin').sub }));
+  const rules = await service().updateRules({ rules: parsed.data, actorId: c.get('admin').sub });
+  const scheduler = await registerGovernanceScheduler();
+  return ok(c, { ...rules, scheduler });
 });
 
 governanceRoutes.post('/change-sets/:id/approve', async (c) => {

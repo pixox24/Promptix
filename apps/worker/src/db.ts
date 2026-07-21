@@ -60,6 +60,25 @@ export const promptTemplates = pgTable('prompt_templates', {
   useCount: integer('use_count').notNull(),
 });
 
+export const governanceRuleSets = pgTable('governance_rule_sets', {
+  id: uuid('id').primaryKey(),
+  version: integer('version').notNull(),
+  rules: jsonb('rules').notNull(),
+  enabled: boolean('enabled').notNull(),
+});
+
+export const agentRuns = pgTable('agent_runs', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  trigger: text('trigger').notNull(),
+  goal: text('goal').notNull(),
+  scope: jsonb('scope').notNull(),
+  promptVersion: text('prompt_version').notNull(),
+  ruleSetId: uuid('rule_set_id').notNull(),
+  ruleSetVersion: integer('rule_set_version').notNull(),
+  status: text('status').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const mediaObjects = pgTable('media_objects', {
   id: uuid('id').defaultRandom().primaryKey(), objectKey:text('object_key').notNull(), bucket:text('bucket').notNull(), url:text('url').notNull(), storageClass:text('storage_class').notNull(), prefixKind:text('prefix_kind').notNull(), expiresAt:timestamp('expires_at',{withTimezone:true}), ownerType:text('owner_type'), ownerId:text('owner_id'), jobId:uuid('job_id'), mime:text('mime'), bytes:integer('bytes'), width:integer('width'), height:integer('height'), createdAt:timestamp('created_at',{withTimezone:true}).notNull(), deletedAt:timestamp('deleted_at',{withTimezone:true}),
 });
