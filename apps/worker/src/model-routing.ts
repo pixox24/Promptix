@@ -16,10 +16,13 @@ export function roleForJob(jobType: JobType): ModelRole | null {
     case 'structure':
     case 'image_reverse':
     case 'provider_test':
+    case 'template_governance_plan':
       return 'text';
     case 'image_generate':
       return 'image';
     case 'noop':
+    case 'template_governance_apply':
+    case 'template_governance_rollback':
       return null;
   }
 }
@@ -35,7 +38,7 @@ export function assertCapabilitiesForJob(model: CapabilityModel, jobType: JobTyp
   if (jobType === 'provider_test' && !capabilities.has('text')) {
     throw new Error('Model ' + model.name + ' lacks text capability');
   }
-  if (jobType === 'text_expand' || jobType === 'structure' || jobType === 'image_reverse') {
+  if (jobType === 'text_expand' || jobType === 'structure' || jobType === 'image_reverse' || jobType === 'template_governance_plan') {
     if (!capabilities.has('text') || !capabilities.has('structured_output')) {
       throw new Error(`Model ${model.name} lacks text or structured_output capability`);
     }

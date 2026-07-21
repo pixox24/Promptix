@@ -6,6 +6,7 @@ import { effectiveIngestJobInput } from './ingest-job-input.js';
 loadEnvFile();
 const { db, generationJobs } = await import('./db.js');
 const { generateImage, structurePromptDetailed } = await import('./adapters.js');
+const { generateGovernanceProposals } = await import('./ai-adapters.js');
 const { runProviderTextTest } = await import('./provider-text-test.js');
 const {
   resolvePrimaryModel,
@@ -25,9 +26,9 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<{jobId:string}>)=>{
   await db.update(generationJobs).set({status:'running',attempts:record.attempts+1,startedAt:new Date(),finishedAt:null,errorMessage:null,errorCode:null,errorDetails:null}).where(eq(generationJobs.id,record.id));
   try{
     let output:unknown;
-    if(record.type==='noop'){
+    if(record.type==='noop' || record.type === 'template_governance_apply' || record.type === 'template_governance_rollback'){
       if((record.input as {fail?:boolean}).fail)throw new Error('Intentional noop failure');
-      output={ok:true,processedAt:new Date().toISOString()};
+      output={ok:true,processedAt:new Date().toISOString(),operation:record.type};
     }else{
       const jobType = jobTypeSchema.parse(record.type);
       const recordInput = effectiveIngestJobInput(jobType, record.input as Record<string, unknown>);
@@ -47,6 +48,8 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<{jobId:string}>)=>{
 
       if (jobType === 'provider_test') {
         output = await runProviderTextTest(primary);
+      } else if (jobType === 'template_governance_plan') {
+        output = await generateGovernanceProposals(primary, record.input as Record<string, unknown>);
       } else if (jobType === 'image_generate') {
         output = await generateImage(primary, record.input as Record<string, unknown>);
         output = await persistGeneratedOutput(record.id, record.templateId, output);

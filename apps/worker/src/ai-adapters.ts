@@ -6,6 +6,9 @@ import {
   templateDraftObjectSchema,
   templateDraftSchema,
   type TemplateDraft,
+  governanceProposalOutputSchema,
+  governanceRuleSetSchema,
+  templateVersionSnapshotSchema,
 } from '@promptix/shared';
 import { generateImage as aiGenerateImage, generateText, NoObjectGeneratedError, Output } from 'ai';
 import { z } from 'zod';
@@ -14,6 +17,8 @@ import { normalizeModelDefaults } from './model-defaults.js';
 import { hasCapability, type ResolvedModel } from './model-types.js';
 import { pipelineError } from './job-errors.js';
 import { outputDiagnostics, parseRepairableJson } from './structured-output.js';
+import { GOVERNANCE_PROMPT_VERSION, TEMPLATE_GOVERNANCE_SYSTEM_PROMPT } from './governance-prompt.js';
+import { normalizeGovernanceBatch } from './template-governance-planner.js';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -263,6 +268,33 @@ export async function structurePromptDetailed(
 
 export async function structurePrompt(config: ResolvedModel, input: JsonRecord): Promise<TemplateDraft> {
   return (await structurePromptDetailed(config, input)).draft;
+}
+
+export async function generateGovernanceProposals(config: ResolvedModel, input: JsonRecord) {
+  if (!hasCapability(config.model, 'text') || !hasCapability(config.model, 'structured_output')) {
+    throw new Error(`Model ${config.model.name} lacks text or structured_output capability`);
+  }
+  const snapshots = templateVersionSnapshotSchema.array().max(50).parse(input.snapshots);
+  const taxonomyCatalog = z.array(z.object({ slug: z.string() })).max(2_000).parse(input.taxonomyCatalog ?? []);
+  const rules = governanceRuleSetSchema.parse(input.rules);
+  const defaults = normalizeModelDefaults(config.provider.adapterType, config.model.defaults);
+  const result = await generateText({
+    model: createLanguageModel(config),
+    system: TEMPLATE_GOVERNANCE_SYSTEM_PROMPT,
+    output: Output.array({ element: governanceProposalOutputSchema, name: 'promptix_governance_proposals' }),
+    maxRetries: 1,
+    abortSignal: AbortSignal.timeout(120000),
+    ...defaults.language,
+    temperature: 0.1,
+    maxOutputTokens: defaults.language.maxOutputTokens ?? 8000,
+    prompt: JSON.stringify({ promptVersion: GOVERNANCE_PROMPT_VERSION, snapshots, signals: input.signals ?? [], taxonomyCatalog, rules }),
+  });
+  return normalizeGovernanceBatch({
+    raw: result.output,
+    snapshots: new Map(snapshots.map((snapshot) => [snapshot.templateId, snapshot])),
+    taxonomySlugs: new Set(taxonomyCatalog.map((term) => term.slug)),
+    rules,
+  });
 }
 
 export async function describeImage(config: ResolvedModel, imageUrl: string) {
