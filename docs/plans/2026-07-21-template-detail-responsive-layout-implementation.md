@@ -107,3 +107,23 @@ npm run build -w @promptix/web
 - 生成图片后脏状态；
 - 收藏、复制和重置。
 
+## 阶段六：视口自适应图片推荐卡
+
+涉及文件：
+
+- `apps/web/src/components/detail/SimilarTemplateCompactCard.tsx`
+- `apps/web/src/components/detail/SimilarTemplateRail.tsx`
+- `apps/web/src/components/detail/PromptStudioDetail.tsx`
+- `apps/web/src/index.css`
+- `apps/web/src/pages/DetailPage.tsx`
+- 相关布局测试
+
+步骤：
+
+1. 将侧栏卡片改为纯图片 3:4 变体，移除图片外部标题区。
+2. 增加 hover、focus-visible 和触屏常显的渐变标题遮罩。
+3. 将翻页按钮移入标题栏，避免额外占用纵向空间。
+4. 分别渲染正常高度和低高度的单侧、双侧推荐栏。
+5. 使用视口宽高联合媒体查询；正常高度每侧两张，低高度每侧一张。
+6. 通过 CSS 变量使卡片在 240–360px 间按横向余量和动态视口高度缩放。
+7. 验证图片加载失败、键盘焦点、触屏遮罩和未保存跳转保护。
