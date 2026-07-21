@@ -78,6 +78,13 @@
       "when": 1784622102045,
       "tag": "0010_template_governance",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1784632800000,
+      "tag": "0011_backfill_missing_template_versions",
+      "breakpoints": true
     }
   ]
 }

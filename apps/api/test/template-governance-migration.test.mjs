@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const migrationUrl = new URL('../drizzle/0010_template_governance.sql', import.meta.url);
+const repairMigrationUrl = new URL('../drizzle/0011_backfill_missing_template_versions.sql', import.meta.url);
+const seedUrl = new URL('../src/db/seed.ts', import.meta.url);
 
 test('template governance migration is additive and creates the full audit model', async () => {
   const migration = await readFile(migrationUrl, 'utf8');
@@ -57,4 +59,19 @@ test('governance states and risk levels are database constrained', async () => {
   assert.match(migration, /governance_change_set_items_status_check/);
   assert.match(migration, /governance_approvals_decision_check/);
   assert.match(migration, /governance_proposals_confidence_check/);
+});
+
+test('later seeded templates receive an idempotent version-one snapshot', async () => {
+  const repairMigration = await readFile(repairMigrationUrl, 'utf8');
+  const seed = await readFile(seedUrl, 'utf8');
+
+  assert.match(repairMigration, /INSERT INTO "template_versions"/);
+  assert.match(repairMigration, /FROM "prompt_templates"/);
+  assert.match(repairMigration, /ON CONFLICT \("template_id", "version"\) DO NOTHING/);
+  assert.doesNotMatch(repairMigration, /\b(?:UPDATE|DELETE|DROP|TRUNCATE)\b/i);
+
+  assert.match(seed, /buildTemplateVersionSnapshot/);
+  assert.match(seed, /db\.insert\(templateVersions\)/);
+  assert.match(seed, /version: 1/);
+  assert.match(seed, /\.onConflictDoNothing\(\)/);
 });

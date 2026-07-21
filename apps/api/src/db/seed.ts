@@ -1,9 +1,11 @@
 import { eq } from 'drizzle-orm';
+import { semanticClassificationSchema } from '@promptix/shared';
 import { loadEnv } from '../config/env.js';
 import { getDb, getSql } from './client.js';
 import { adminUsers } from './schema.js';
-import { promptTemplates, taxonomyTerms, templateTaxonomyAssignments } from './schema.js';
+import { promptTemplates, taxonomyTerms, templateTaxonomyAssignments, templateVersions } from './schema.js';
 import { hashPassword } from '../lib/password.js';
+import { buildTemplateVersionSnapshot } from '../lib/template-versioning.js';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -82,6 +84,26 @@ async function main() {
       await db.insert(templateTaxonomyAssignments).values(assignments.map((term) => ({
         templateId: template.id, termId: term.id, source: 'migration',
       })));
+    }
+    const [seeded] = await db.select().from(promptTemplates).where(eq(promptTemplates.id, template.id)).limit(1);
+    if (seeded) {
+      const slugs = (dimension: 'scenario' | 'style' | 'subject') =>
+        assignments.filter((term) => term.dimension === dimension).map((term) => term.slug);
+      await db.insert(templateVersions).values({
+        templateId: seeded.id,
+        version: 1,
+        snapshot: buildTemplateVersionSnapshot(seeded, semanticClassificationSchema.parse({
+          workflowType: seeded.workflowType,
+          outputType: outputType?.slug ?? null,
+          scenarios: slugs('scenario'),
+          styles: slugs('style'),
+          subjects: slugs('subject'),
+          tags: seeded.tags,
+          unmappedTerms: seeded.unmappedTerms,
+          confidence: {},
+        })),
+        source: 'migration',
+      }).onConflictDoNothing();
     }
   }
   console.log(`[seed] upserted ${source.templates.length} templates`);
