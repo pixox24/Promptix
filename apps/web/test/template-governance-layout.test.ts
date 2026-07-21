@@ -6,6 +6,7 @@ import { didGovernanceRunFinish } from '../src/hooks/useGovernanceRuns';
 test('admin templates route renders the three-column governance workspace', async () => {
   const admin = await readFile(new URL('../src/pages/AdminPage.tsx', import.meta.url), 'utf8');
   const page = await readFile(new URL('../src/pages/admin/TemplateGovernancePage.tsx', import.meta.url), 'utf8');
+  assert.match(admin, /const TemplateGovernancePage = lazy/);
   assert.match(admin, /path="templates" element={<TemplateGovernancePage/);
   for (const component of ['GovernanceQueueSidebar', 'GovernanceTemplateTable', 'GovernanceInspector', 'GovernanceCommandBar', 'GovernanceBulkBar']) assert.match(page, new RegExp(component));
   assert.match(page, /\/admin\/templates\/new/);
@@ -32,4 +33,13 @@ test('run polling recognizes active-to-terminal transitions', () => {
   assert.equal(didGovernanceRunFinish('auto_executing', 'failed'), true);
   assert.equal(didGovernanceRunFinish('succeeded', 'succeeded'), false);
   assert.equal(didGovernanceRunFinish(null, 'succeeded'), false);
+});
+
+test('exposes an independent Agent settings entry', async () => {
+  const admin = await readFile(new URL('../src/pages/AdminPage.tsx', import.meta.url), 'utf8');
+  const settings = await readFile(new URL('../src/pages/admin/AgentSettingsPage.tsx', import.meta.url), 'utf8');
+  assert.match(admin, /path="agent" element={<AgentSettingsPage/);
+  assert.match(admin, /Nav to="\/admin\/agent"/);
+  assert.match(settings, /结构化文本模型/);
+  assert.match(settings, /系统提示词/);
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   Link,
   Navigate,
@@ -10,14 +10,15 @@ import {
 } from "react-router-dom";
 import type { PromptVariable } from "../types/prompt";
 import type { SemanticClassification } from "@promptix/shared";
-import { ProviderModelsPage } from "./admin/ProviderModelsPage";
 import type { AdminModel } from "../types/adminModels";
 import { api, ApiError } from "../lib/api";
-import { IngestPage } from "./admin/IngestPage";
 import { fetchTaxonomy, type TaxonomyTerm } from "../data/taxonomyApi";
-import { TaxonomyPage } from "./admin/TaxonomyPage";
-import { TemplateGovernancePage } from "./admin/TemplateGovernancePage";
 import { useConfirmDialog } from "../context/ConfirmDialogContext";
+const ProviderModelsPage = lazy(() => import('./admin/ProviderModelsPage').then((module) => ({ default: module.ProviderModelsPage })));
+const IngestPage = lazy(() => import('./admin/IngestPage').then((module) => ({ default: module.IngestPage })));
+const TaxonomyPage = lazy(() => import('./admin/TaxonomyPage').then((module) => ({ default: module.TaxonomyPage })));
+const TemplateGovernancePage = lazy(() => import('./admin/TemplateGovernancePage').then((module) => ({ default: module.TemplateGovernancePage })));
+const AgentSettingsPage = lazy(() => import('./admin/AgentSettingsPage').then((module) => ({ default: module.AgentSettingsPage })));
 
 type Admin = { id: string; email: string; displayName: string; role: string };
 type Template = {
@@ -217,30 +218,31 @@ function AdminShell({
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
       <header className="border-b bg-slate-950 text-white">
-        <div className="mx-auto flex max-w-[1500px] items-center gap-6 px-5 py-4">
+        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-3 px-5 py-4 md:flex-nowrap md:gap-6">
           <Link to="/admin/templates" className="text-lg font-bold">
             Promptix <span className="text-violet-400">Admin</span>
           </Link>
-          <nav className="flex flex-1 gap-1 text-sm">
+          <nav className="order-3 flex w-full gap-1 overflow-x-auto text-sm md:order-none md:w-auto md:flex-1">
             <Nav to="/admin/templates">模板</Nav>
             <Nav to="/admin/ingest">智能入库</Nav>
             <Nav to="/admin/taxonomy">分类词库</Nav>
             <Nav to="/admin/jobs">任务</Nav>
             <Nav to="/admin/providers">模型</Nav>
+            <Nav to="/admin/agent">Agent</Nav>
           </nav>
           <span className="hidden text-xs text-gray-400 md:inline">
             {admin.email}
           </span>
           <button
             onClick={onLogout}
-            className="text-sm text-gray-300 hover:text-white"
+            className="ml-auto text-sm text-gray-300 hover:text-white md:ml-0"
           >
             退出
           </button>
         </div>
       </header>
       <main className="mx-auto max-w-[1500px] p-5 md:p-8">
-        <Routes>
+        <Suspense fallback={<div className="grid min-h-64 place-items-center text-sm text-slate-500">正在加载后台模块…</div>}><Routes>
           <Route index element={<Navigate to="templates" replace />} />
           <Route path="templates" element={<TemplateGovernancePage />} />
           <Route path="templates/new" element={<TemplateEditor />} />
@@ -249,8 +251,9 @@ function AdminShell({
           <Route path="taxonomy" element={<TaxonomyPage />} />
           <Route path="jobs" element={<Jobs />} />
           <Route path="providers" element={<ProviderModelsPage />} />
+          <Route path="agent" element={<AgentSettingsPage />} />
           <Route path="*" element={<Navigate to="templates" replace />} />
-        </Routes>
+        </Routes></Suspense>
       </main>
     </div>
   );
@@ -258,7 +261,7 @@ function AdminShell({
 function Nav({ to, children }: { to: string; children: string }) {
   return (
     <Link
-      className="rounded-lg px-3 py-2 text-gray-300 hover:bg-white/10 hover:text-white"
+      className="shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-gray-300 hover:bg-white/10 hover:text-white"
       to={to}
     >
       {children}

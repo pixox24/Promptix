@@ -49,12 +49,14 @@ export type GovernanceChangeSetSummary = {
   createdAt: string;
   updatedAt: string;
 };
+export type GovernanceAuditEvent = { id: string; actorType: 'admin' | 'agent' | 'system'; eventType: string; targetType: string; targetId: string; runId: string | null; changeSetId: string | null; proposalId: string | null; payload: Record<string, unknown>; createdAt: string };
 
 export type GovernanceRunDetail = GovernanceRunSummary & {
   requestPreview: { goal: string; promptVersion: string; ruleSetVersion: number; templateCount: number; signalCount: number; templateIds: string[] };
   job: null | { id: string; status: string; errorCode: string | null; errorMessage: string | null; createdAt: string; startedAt: string | null; finishedAt: string | null };
   proposals: GovernanceProposalDetail[];
   changeSets: GovernanceChangeSetSummary[];
+  audits: GovernanceAuditEvent[];
 };
 
 export type GovernanceChangeSetPreview = {

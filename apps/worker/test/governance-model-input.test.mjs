@@ -6,5 +6,7 @@ test('governance model input contains the administrator goal and deterministic s
   const source = await readFile(new URL('../src/ai-adapters.ts', import.meta.url), 'utf8');
   assert.match(source, /goal, snapshots, signals, taxonomyCatalog, rules/);
   assert.match(source, /buildGovernanceSignals/);
+  assert.match(source, /systemPrompt/);
+  assert.match(source, /promptVersion/);
   assert.doesNotMatch(source, /signals: input\.signals \?\? \[\]/);
 });

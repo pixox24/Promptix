@@ -139,6 +139,11 @@ export const governanceSemanticSchema = z.object({
 export type GovernanceSemantic = z.infer<typeof governanceSemanticSchema>;
 
 export const governanceRuleSetSchema = z.object({
+  agent: z.object({
+    modelId: z.string().uuid().nullable().default(null),
+    promptVersion: z.string().trim().min(1).max(120).default('template-governance-v1'),
+    systemPrompt: z.string().max(20_000).default(''),
+  }).default({}),
   schedule: z.object({
     enabled: z.boolean(),
     cron: z.string().trim().min(1).max(120),

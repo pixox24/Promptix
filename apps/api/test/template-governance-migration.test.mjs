@@ -4,6 +4,8 @@ import test from 'node:test';
 
 const migrationUrl = new URL('../drizzle/0010_template_governance.sql', import.meta.url);
 const repairMigrationUrl = new URL('../drizzle/0011_backfill_missing_template_versions.sql', import.meta.url);
+const auditDeleteMigrationUrl = new URL('../drizzle/0012_governance_agent_audit.sql', import.meta.url);
+const jobDeleteMigrationUrl = new URL('../drizzle/0013_template_delete_job_reference.sql', import.meta.url);
 const seedUrl = new URL('../src/db/seed.ts', import.meta.url);
 
 test('template governance migration is additive and creates the full audit model', async () => {
@@ -74,4 +76,15 @@ test('later seeded templates receive an idempotent version-one snapshot', async 
   assert.match(seed, /db\.insert\(templateVersions\)/);
   assert.match(seed, /version: 1/);
   assert.match(seed, /\.onConflictDoNothing\(\)/);
+});
+
+test('permanent delete preserves audits and historical generation jobs', async () => {
+  const [auditMigration, jobMigration] = await Promise.all([
+    readFile(auditDeleteMigrationUrl, 'utf8'),
+    readFile(jobDeleteMigrationUrl, 'utf8'),
+  ]);
+  assert.match(auditMigration, /governance_audit_events_proposal_id_governance_proposals_id_fk/);
+  assert.match(auditMigration, /ON DELETE set null/);
+  assert.match(jobMigration, /generation_jobs_template_id_prompt_templates_id_fk/);
+  assert.match(jobMigration, /ON DELETE set null/);
 });

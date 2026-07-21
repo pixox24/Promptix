@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
-import { desc, eq, inArray, sql } from 'drizzle-orm';
-import { governanceRuleSetSchema, governanceSelectionScopeSchema, type GovernanceQueueId } from '@promptix/shared';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { governanceRuleSetSchema, governanceSelectionScopeSchema, modelCapabilitySchema, type GovernanceQueueId } from '@promptix/shared';
 import { z } from 'zod';
 import { getDb } from '../db/client.js';
-import { agentRuns, generationJobs, governanceApprovals, governanceChangeSetItems, governanceChangeSets, governanceProposals, governanceRuleSets, providerModels } from '../db/schema.js';
+import { agentRuns, generationJobs, governanceApprovals, governanceAuditEvents, governanceChangeSetItems, governanceChangeSets, governanceProposals, governanceRuleSets, providerModels, providers } from '../db/schema.js';
 import { requireAdmin, type AdminVars } from '../lib/auth.js';
 import { GovernanceQueryValidationError, parseGovernancePageQuery } from '../lib/governance-query.js';
 import { inspect_template, search_templates, submit_for_approval, validate_template } from '../lib/governance-tools.js';
@@ -24,6 +24,11 @@ const changeSetInput = z.object({ runId: z.string().uuid(), proposalIds: z.array
 const runListInput = z.object({
   status: z.string().trim().max(80).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+const agentConfigInput = z.object({
+  modelId: z.string().uuid().nullable(),
+  promptVersion: z.string().trim().min(1).max(120),
+  systemPrompt: z.string().max(20_000),
 });
 
 function service() {
@@ -94,7 +99,7 @@ governanceRoutes.post('/runs', async (c) => {
   const parsed = commandInput.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid command', 400);
   try {
-    const run = await service().createRun({ ...parsed.data, requestedBy: c.get('admin').sub, promptVersion: 'template-governance-v1' });
+    const run = await service().createRun({ ...parsed.data, requestedBy: c.get('admin').sub });
     return ok(c, run, 202);
   } catch (error) { return stateFailure(c, error); }
 });
@@ -110,6 +115,34 @@ governanceRoutes.put('/rule-sets/active', async (c) => {
   const rules = await service().updateRules({ rules: parsed.data, actorId: c.get('admin').sub });
   const scheduler = await registerGovernanceScheduler();
   return ok(c, { ...rules, scheduler });
+});
+
+governanceRoutes.get('/agent-config', async (c) => {
+  const [rules] = await getDb().select().from(governanceRuleSets).where(eq(governanceRuleSets.enabled, true)).limit(1);
+  if (!rules) return fail(c, 'NOT_FOUND', 'Active governance rules not found', 404);
+  const models = await getDb().select({ id: providerModels.id, name: providerModels.name, modelId: providerModels.modelId, capabilities: providerModels.capabilities, providerId: providerModels.providerId })
+    .from(providerModels).innerJoin(providers, eq(providerModels.providerId, providers.id)).where(and(eq(providerModels.enabled, true), eq(providers.enabled, true)));
+  return ok(c, {
+    config: governanceRuleSetSchema.parse(rules.rules).agent,
+    defaultPromptVersion: 'template-governance-v1',
+    models: models.filter((model) => modelCapabilitySchema.array().safeParse(model.capabilities).success && modelCapabilitySchema.array().parse(model.capabilities).includes('text') && modelCapabilitySchema.array().parse(model.capabilities).includes('structured_output')),
+  });
+});
+
+governanceRoutes.put('/agent-config', async (c) => {
+  const parsed = agentConfigInput.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid Agent config', 400);
+  const [active] = await getDb().select().from(governanceRuleSets).where(eq(governanceRuleSets.enabled, true)).limit(1);
+  if (!active) return fail(c, 'NOT_FOUND', 'Active governance rules not found', 404);
+  if (parsed.data.modelId) {
+    const [selected] = await getDb().select({ model: providerModels, providerEnabled: providers.enabled }).from(providerModels).innerJoin(providers, eq(providerModels.providerId, providers.id)).where(eq(providerModels.id, parsed.data.modelId)).limit(1);
+    const capabilities = selected ? modelCapabilitySchema.array().safeParse(selected.model.capabilities) : null;
+    if (!selected || !selected.model.enabled || !selected.providerEnabled || !capabilities?.success || !capabilities.data.includes('text') || !capabilities.data.includes('structured_output')) return fail(c, 'MODEL_NOT_CONFIGURED', '请选择已启用且支持结构化输出的文本模型', 409);
+  }
+  const current = governanceRuleSetSchema.parse(active.rules);
+  const saved = await service().updateRules({ rules: { ...current, agent: parsed.data }, actorId: c.get('admin').sub });
+  const scheduler = await registerGovernanceScheduler();
+  return ok(c, { config: saved.rules.agent, version: saved.version, scheduler });
 });
 
 governanceRoutes.post('/change-sets/:id/approve', async (c) => {
@@ -129,6 +162,7 @@ governanceRoutes.post('/change-sets', async (c) => {
   const result = await getDb().transaction(async (tx) => {
     const [changeSet] = await tx.insert(governanceChangeSets).values({ runId: run.id, scopeSnapshot: { mode: 'explicit', templateIds: proposals.map((proposal) => proposal.templateId), proposalIds: proposals.map((proposal) => proposal.id) }, ruleSetId: run.ruleSetId, ruleSetVersion: run.ruleSetVersion, idempotencyKey: parsed.data.idempotencyKey, status: proposals.some((proposal) => proposal.requiresApproval) ? 'awaiting_approval' : 'planned', summary: { total: proposals.length } }).returning();
     await tx.insert(governanceChangeSetItems).values(proposals.map((proposal) => ({ changeSetId: changeSet.id, proposalId: proposal.id, templateId: proposal.templateId, status: proposal.requiresApproval ? 'awaiting_approval' : 'pending' })));
+    await tx.insert(governanceAuditEvents).values({ actorType: 'admin', actorId: c.get('admin').sub, eventType: 'governance.change_set_created', targetType: 'change_set', targetId: changeSet.id, runId: run.id, changeSetId: changeSet.id, payload: { proposalIds: proposals.map((proposal) => proposal.id), idempotencyKey: parsed.data.idempotencyKey } });
     return changeSet;
   });
   return ok(c, result, 201);
@@ -175,11 +209,12 @@ governanceRoutes.get('/runs', async (c) => {
 governanceRoutes.get('/runs/:id', async (c) => {
   const [run] = await getDb().select().from(agentRuns).where(eq(agentRuns.id, c.req.param('id'))).limit(1);
   if (!run) return fail(c, 'NOT_FOUND', 'Agent run not found', 404);
-  const [proposals, changeSets, jobs, models] = await Promise.all([
+  const [proposals, changeSets, jobs, models, audits] = await Promise.all([
     getDb().select().from(governanceProposals).where(eq(governanceProposals.runId, run.id)).orderBy(desc(governanceProposals.createdAt)),
     getDb().select().from(governanceChangeSets).where(eq(governanceChangeSets.runId, run.id)).orderBy(desc(governanceChangeSets.createdAt)),
     getDb().select().from(generationJobs).where(sql`${generationJobs.input}->>'targetId' = ${run.id}`).orderBy(desc(generationJobs.createdAt)).limit(1),
     run.modelId ? getDb().select().from(providerModels).where(eq(providerModels.id, run.modelId)).limit(1) : Promise.resolve([]),
+    getDb().select().from(governanceAuditEvents).where(eq(governanceAuditEvents.runId, run.id)).orderBy(desc(governanceAuditEvents.createdAt)),
   ]);
   const jobInput = (jobs[0]?.input ?? {}) as Record<string, unknown>;
   const snapshots = Array.isArray(jobInput.snapshots) ? jobInput.snapshots : [];
@@ -198,17 +233,19 @@ governanceRoutes.get('/runs/:id', async (c) => {
     job: jobs[0] ? { id: jobs[0].id, status: jobs[0].status, errorCode: jobs[0].errorCode, errorMessage: jobs[0].errorMessage, createdAt: jobs[0].createdAt, startedAt: jobs[0].startedAt, finishedAt: jobs[0].finishedAt } : null,
     proposals,
     changeSets,
+    audits,
   });
 });
 
 governanceRoutes.get('/change-sets/:id', async (c) => {
   const [changeSet] = await getDb().select().from(governanceChangeSets).where(eq(governanceChangeSets.id, c.req.param('id'))).limit(1);
   if (!changeSet) return fail(c, 'NOT_FOUND', 'Change set not found', 404);
-  const [items, approvals] = await Promise.all([
+  const [items, approvals, audits] = await Promise.all([
     getDb().select().from(governanceChangeSetItems).where(eq(governanceChangeSetItems.changeSetId, changeSet.id)),
     getDb().select().from(governanceApprovals).where(eq(governanceApprovals.changeSetId, changeSet.id)).orderBy(desc(governanceApprovals.createdAt)),
+    getDb().select().from(governanceAuditEvents).where(eq(governanceAuditEvents.changeSetId, changeSet.id)).orderBy(desc(governanceAuditEvents.createdAt)),
   ]);
-  return ok(c, { ...changeSet, items, approvals });
+  return ok(c, { ...changeSet, items, approvals, audits });
 });
 
 governanceRoutes.get('/change-sets/:id/preview', async (c) => {

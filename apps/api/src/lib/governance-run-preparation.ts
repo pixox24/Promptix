@@ -42,10 +42,16 @@ export async function prepareGovernanceRun(runId: string) {
   const models = await db.select({ model: providerModels, provider: providers }).from(providerModels)
     .innerJoin(providers, eq(providerModels.providerId, providers.id))
     .where(eq(providerModels.isDefaultText, true)).limit(20);
-  const selected = models.find(({ model, provider }) => model.enabled && provider.enabled
+  const selected = rulesResult.data.agent.modelId
+    ? models.find(({ model }) => model.id === rulesResult.data.agent.modelId)
+    : models.find(({ model, provider }) => model.enabled && provider.enabled
     && modelCapabilitySchema.array().safeParse(model.capabilities).success
     && modelCapabilitySchema.array().parse(model.capabilities).includes('structured_output'));
-  if (!selected) throw new GovernancePreparationError('MODEL_NOT_CONFIGURED', '未配置已启用且支持结构化输出的默认文本模型');
+  if (!selected || !selected.model.enabled || !selected.provider.enabled
+    || !modelCapabilitySchema.array().safeParse(selected.model.capabilities).success
+    || !modelCapabilitySchema.array().parse(selected.model.capabilities).includes('structured_output')) {
+    throw new GovernancePreparationError('MODEL_NOT_CONFIGURED', '未配置已启用且支持结构化输出的 Agent 文本模型');
+  }
 
   const scopeResult = governanceSelectionScopeSchema.safeParse(run.scope);
   if (!scopeResult.success) throw new GovernancePreparationError('SCOPE_INVALID', '治理运行范围格式无效');
@@ -80,6 +86,14 @@ export async function prepareGovernanceRun(runId: string) {
     rules: rulesResult.data,
     model: selected.model,
     provider: selected.provider,
-    input: { targetId: run.id, goal: run.goal, snapshots, taxonomyCatalog, rules: rulesResult.data },
+    input: {
+      targetId: run.id,
+      goal: run.goal,
+      promptVersion: rulesResult.data.agent.promptVersion,
+      systemPrompt: rulesResult.data.agent.systemPrompt,
+      snapshots,
+      taxonomyCatalog,
+      rules: rulesResult.data,
+    },
   };
 }

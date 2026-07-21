@@ -20,10 +20,10 @@ export type GovernanceQueuePort = { enqueue(input: { type: 'template_governance_
 export class GovernanceService {
   constructor(private repository: GovernanceServiceRepository, private queue: GovernanceQueuePort) {}
 
-  async createRun(input: { goal: string; scope: unknown; requestedBy: string; idempotencyKey: string; promptVersion: string }) {
+  async createRun(input: { goal: string; scope: unknown; requestedBy: string; idempotencyKey: string; promptVersion?: string }) {
     const scope = governanceSelectionScopeSchema.parse(input.scope);
     const active = await this.repository.activeRules();
-    const run = await this.repository.createRun({ ...input, scope, ruleSetId: active.id, ruleSetVersion: active.version });
+    const run = await this.repository.createRun({ ...input, promptVersion: input.promptVersion ?? active.rules.agent.promptVersion, scope, ruleSetId: active.id, ruleSetVersion: active.version });
     try { await this.queue.enqueue({ type: 'template_governance_plan', targetId: run.id }); }
     catch (error) {
       const code = error instanceof GovernanceStateError ? error.code : 'QUEUE_UNAVAILABLE';

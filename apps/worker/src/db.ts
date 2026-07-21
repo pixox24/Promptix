@@ -102,6 +102,9 @@ export const governanceChangeSets = pgTable('governance_change_sets', {
 export const governanceChangeSetItems = pgTable('governance_change_set_items', {
   id: uuid('id').defaultRandom().primaryKey(), changeSetId: uuid('change_set_id').notNull(), proposalId: uuid('proposal_id').notNull(), templateId: text('template_id').notNull(), status: text('status').notNull(), appliedVersion: integer('applied_version'), errorCode: text('error_code'), errorMessage: text('error_message'), finishedAt: timestamp('finished_at', { withTimezone: true }),
 });
+export const governanceAuditEvents = pgTable('governance_audit_events', {
+  id: uuid('id').defaultRandom().primaryKey(), actorType: text('actor_type').notNull(), actorId: uuid('actor_id'), eventType: text('event_type').notNull(), targetType: text('target_type').notNull(), targetId: text('target_id').notNull(), runId: uuid('run_id'), changeSetId: uuid('change_set_id'), proposalId: uuid('proposal_id'), payload: jsonb('payload').notNull(), createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const mediaObjects = pgTable('media_objects', {
   id: uuid('id').defaultRandom().primaryKey(), objectKey:text('object_key').notNull(), bucket:text('bucket').notNull(), url:text('url').notNull(), storageClass:text('storage_class').notNull(), prefixKind:text('prefix_kind').notNull(), expiresAt:timestamp('expires_at',{withTimezone:true}), ownerType:text('owner_type'), ownerId:text('owner_id'), jobId:uuid('job_id'), mime:text('mime'), bytes:integer('bytes'), width:integer('width'), height:integer('height'), createdAt:timestamp('created_at',{withTimezone:true}).notNull(), deletedAt:timestamp('deleted_at',{withTimezone:true}),

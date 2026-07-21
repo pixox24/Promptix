@@ -51,6 +51,13 @@ test('governance queue identifiers are stable machine values', () => {
   ]);
 });
 
+test('governance rules carry versioned Agent configuration with safe defaults', () => {
+  assert.deepEqual(rules.agent, { modelId: null, promptVersion: 'template-governance-v1', systemPrompt: '' });
+  const configured = governanceRuleSetSchema.parse({ ...rules, agent: { modelId: '11111111-1111-4111-8111-111111111111', promptVersion: 'governance-v2', systemPrompt: '只返回结构化治理建议。' } });
+  assert.equal(configured.agent.promptVersion, 'governance-v2');
+  assert.equal(configured.agent.modelId, '11111111-1111-4111-8111-111111111111');
+});
+
 test('selection scope distinguishes explicit ids from a captured query', () => {
   assert.deepEqual(
     governanceSelectionScopeSchema.parse({ mode: 'explicit', templateIds: ['tpl-a'] }),

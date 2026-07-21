@@ -279,6 +279,8 @@ export async function generateGovernanceProposals(config: ResolvedModel, input: 
   const taxonomyCatalog = z.array(z.object({ slug: z.string() })).max(2_000).parse(input.taxonomyCatalog ?? []);
   const rules = governanceRuleSetSchema.parse(input.rules);
   const goal = z.string().trim().min(1).max(2_000).parse(input.goal ?? '执行模板治理巡检');
+  const promptVersion = z.string().trim().min(1).max(120).parse(input.promptVersion ?? rules.agent.promptVersion);
+  const systemPrompt = z.string().max(20_000).parse(input.systemPrompt ?? rules.agent.systemPrompt);
   const signals = buildGovernanceSignals(snapshots.map((snapshot) => ({
     id: snapshot.templateId,
     name: snapshot.name,
@@ -293,14 +295,14 @@ export async function generateGovernanceProposals(config: ResolvedModel, input: 
   const defaults = normalizeModelDefaults(config.provider.adapterType, config.model.defaults);
   const result = await generateText({
     model: createLanguageModel(config),
-    system: TEMPLATE_GOVERNANCE_SYSTEM_PROMPT,
+    system: systemPrompt.trim() || TEMPLATE_GOVERNANCE_SYSTEM_PROMPT,
     output: Output.array({ element: governanceProposalOutputSchema, name: 'promptix_governance_proposals' }),
     maxRetries: 1,
     abortSignal: AbortSignal.timeout(120000),
     ...defaults.language,
     temperature: 0.1,
     maxOutputTokens: defaults.language.maxOutputTokens ?? 8000,
-    prompt: JSON.stringify({ promptVersion: GOVERNANCE_PROMPT_VERSION, goal, snapshots, signals, taxonomyCatalog, rules }),
+    prompt: JSON.stringify({ promptVersion, goal, snapshots, signals, taxonomyCatalog, rules }),
   });
   return normalizeGovernanceBatch({
     raw: result.output,

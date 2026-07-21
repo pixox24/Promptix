@@ -1,6 +1,6 @@
 import { UnrecoverableError, Worker, type Job } from 'bullmq';
 import { eq } from 'drizzle-orm';
-import { jobTypeSchema } from '@promptix/shared';
+import { governanceRuleSetSchema, jobTypeSchema } from '@promptix/shared';
 import { loadEnvFile, redisConnection } from './env.js';
 import { effectiveIngestJobInput } from './ingest-job-input.js';
 loadEnvFile();
@@ -28,9 +28,10 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
   if (!('jobId' in job.data)) {
     const [rules] = await db.select().from(governanceRuleSets).where(eq(governanceRuleSets.id, job.data.ruleSetId)).limit(1);
     if (!rules || !rules.enabled || rules.version !== job.data.ruleSetVersion) return { skipped: true, reason: 'RULE_SET_CHANGED' };
-    const [run] = await db.insert(agentRuns).values({ trigger: 'scheduled', goal: '定时模板治理巡检', scope: { mode: 'query', query: { scenarios: [], styles: [], subjects: [], sort: 'updated_desc' }, exclusions: [], snapshotAt: new Date().toISOString(), schedulerJobId: job.id }, promptVersion: 'template-governance-v1', ruleSetId: rules.id, ruleSetVersion: rules.version, status: 'queued' }).returning();
+    const parsedRules = governanceRuleSetSchema.parse(rules.rules);
+    const [run] = await db.insert(agentRuns).values({ trigger: 'scheduled', goal: '定时模板治理巡检', scope: { mode: 'query', query: { scenarios: [], styles: [], subjects: [], sort: 'updated_desc' }, exclusions: [], snapshotAt: new Date().toISOString(), schedulerJobId: job.id }, promptVersion: parsedRules.agent.promptVersion, ruleSetId: rules.id, ruleSetVersion: rules.version, status: 'queued' }).returning();
     try {
-      const model = await resolvePrimaryModel('template_governance_plan', null, null);
+      const model = await resolvePrimaryModel('template_governance_plan', parsedRules.agent.modelId, null);
       await db.update(agentRuns).set({ status: 'analyzing', modelId: model.model.id, startedAt: new Date(), progress: { phase: 'analyzing', percent: 20 } }).where(eq(agentRuns.id, run.id));
       const input = await buildScheduledGovernanceInput(rules.rules);
       const proposals = await generateGovernanceProposals(model, input);

@@ -3,6 +3,7 @@ import { governanceTemplateQuerySchema, type GovernanceTemplateQuery } from '@pr
 import { getDb } from '../db/client.js';
 import {
   governanceApprovals,
+  governanceAuditEvents,
   governanceChangeSetItems,
   governanceChangeSets,
   governanceProposals,
@@ -103,8 +104,12 @@ export const preview_changes = async (input: { changeSetId: string }) => {
 };
 export const execute_auto_changes = (service: GovernanceService, input: Parameters<GovernanceService['retry']>[0]) => service.retry(input);
 export const submit_for_approval = async (input: { changeSetId: string; idempotencyKey: string }) => {
-  const [updated] = await getDb().update(governanceChangeSets).set({ status: 'awaiting_approval', updatedAt: new Date() })
-    .where(and(eq(governanceChangeSets.id, input.changeSetId), eq(governanceChangeSets.status, 'planned'))).returning();
+  const updated = await getDb().transaction(async (tx) => {
+    const [next] = await tx.update(governanceChangeSets).set({ status: 'awaiting_approval', updatedAt: new Date() })
+      .where(and(eq(governanceChangeSets.id, input.changeSetId), eq(governanceChangeSets.status, 'planned'))).returning();
+    if (next) await tx.insert(governanceAuditEvents).values({ actorType: 'system', eventType: 'governance.change_set_submitted', targetType: 'change_set', targetId: next.id, changeSetId: next.id, payload: { idempotencyKey: input.idempotencyKey } });
+    return next;
+  });
   return updated ?? null;
 };
 export const get_change_set_status = async (input: { changeSetId: string }) => {

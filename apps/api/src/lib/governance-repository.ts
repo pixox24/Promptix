@@ -54,6 +54,7 @@ export function createGovernanceRepository(): GovernanceServiceRepository {
         const [latest] = await tx.select({ version: governanceRuleSets.version }).from(governanceRuleSets).orderBy(desc(governanceRuleSets.version)).limit(1);
         await tx.update(governanceRuleSets).set({ enabled: false, updatedAt: new Date() }).where(eq(governanceRuleSets.enabled, true));
         const [created] = await tx.insert(governanceRuleSets).values({ name: 'default', version: (latest?.version ?? 0) + 1, rules: input.rules, enabled: true, createdBy: input.actorId }).returning();
+        await tx.insert(governanceAuditEvents).values({ actorType: 'admin', actorId: input.actorId, eventType: 'governance.rule_set_created', targetType: 'rule_set', targetId: created.id, payload: { version: created.version, agent: (input.rules as GovernanceRuleSet).agent } });
         return { id: created.id, version: created.version, rules: created.rules as GovernanceRuleSet };
       });
     },
