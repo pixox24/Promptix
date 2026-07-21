@@ -71,6 +71,13 @@
       "when": 1784546549243,
       "tag": "0009_happy_whistler",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784622102045,
+      "tag": "0010_template_governance",
+      "breakpoints": true
     }
   ]
 }

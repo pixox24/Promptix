@@ -85,6 +85,7 @@ export const promptTemplates = pgTable(
     locale: text('locale').notNull().default('zh'),
     i18n: jsonb('i18n'),
     publishedAt: timestamp('published_at', { withTimezone: true }),
+    currentVersion: integer('current_version').notNull().default(1),
     createdBy: uuid('created_by').references(() => adminUsers.id),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -232,6 +233,191 @@ export const ingestSystemPrompts = pgTable(
       'ingest_system_prompts_prompt_length_check',
       sql`char_length(btrim(${t.prompt})) between 1 and 20000`,
     ),
+  ],
+);
+
+export const governanceRuleSets = pgTable(
+  'governance_rule_sets',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: text('name').notNull(),
+    version: integer('version').notNull(),
+    rules: jsonb('rules').notNull(),
+    enabled: boolean('enabled').notNull().default(false),
+    createdBy: uuid('created_by').references(() => adminUsers.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('governance_rule_sets_name_version_uidx').on(t.name, t.version),
+    uniqueIndex('governance_rule_sets_single_active_uidx').on(t.enabled).where(sql`${t.enabled} = true`),
+    check('governance_rule_sets_version_check', sql`${t.version} > 0`),
+  ],
+);
+
+export const agentRuns = pgTable(
+  'agent_runs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    trigger: text('trigger').notNull(),
+    goal: text('goal').notNull().default(''),
+    scope: jsonb('scope').notNull().default({}),
+    promptVersion: text('prompt_version').notNull(),
+    ruleSetId: uuid('rule_set_id').notNull().references(() => governanceRuleSets.id),
+    ruleSetVersion: integer('rule_set_version').notNull(),
+    modelId: uuid('model_id').references(() => providerModels.id),
+    status: text('status').notNull().default('queued'),
+    progress: jsonb('progress'),
+    stats: jsonb('stats'),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    requestedBy: uuid('requested_by').references(() => adminUsers.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('agent_runs_status_created_idx').on(t.status, t.createdAt),
+    index('agent_runs_rule_set_created_idx').on(t.ruleSetId, t.createdAt),
+    check('agent_runs_trigger_check', sql`${t.trigger} in ('scheduled','manual')`),
+    check('agent_runs_status_check', sql`${t.status} in ('queued','analyzing','planned','auto_executing','awaiting_approval','partially_succeeded','succeeded','failed','cancelled')`),
+  ],
+);
+
+export const governanceChangeSets = pgTable(
+  'governance_change_sets',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    runId: uuid('run_id').notNull().references(() => agentRuns.id),
+    scopeSnapshot: jsonb('scope_snapshot').notNull(),
+    exclusionIds: text('exclusion_ids').array().notNull().default([]),
+    ruleSetId: uuid('rule_set_id').notNull().references(() => governanceRuleSets.id),
+    ruleSetVersion: integer('rule_set_version').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    status: text('status').notNull().default('planned'),
+    summary: jsonb('summary').notNull().default({}),
+    rollbackUntil: timestamp('rollback_until', { withTimezone: true }),
+    executedAt: timestamp('executed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('governance_change_sets_idempotency_key_uidx').on(t.idempotencyKey),
+    index('governance_change_sets_run_status_idx').on(t.runId, t.status),
+    check('governance_change_sets_status_check', sql`${t.status} in ('planned','auto_executing','awaiting_approval','approved','rejected','partially_succeeded','succeeded','failed','cancelled','rollback_available','rolled_back')`),
+  ],
+);
+
+export const templateVersions = pgTable(
+  'template_versions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    templateId: text('template_id').notNull().references(() => promptTemplates.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    snapshot: jsonb('snapshot').notNull(),
+    source: text('source').notNull(),
+    actorId: uuid('actor_id').references(() => adminUsers.id),
+    runId: uuid('run_id').references(() => agentRuns.id),
+    changeSetId: uuid('change_set_id').references(() => governanceChangeSets.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('template_versions_template_version_uidx').on(t.templateId, t.version),
+    index('template_versions_change_set_idx').on(t.changeSetId),
+    check('template_versions_version_check', sql`${t.version} > 0`),
+    check('template_versions_source_check', sql`${t.source} in ('admin','agent','rollback','migration')`),
+  ],
+);
+
+export const governanceProposals = pgTable(
+  'governance_proposals',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    runId: uuid('run_id').notNull().references(() => agentRuns.id, { onDelete: 'cascade' }),
+    templateId: text('template_id').notNull().references(() => promptTemplates.id, { onDelete: 'cascade' }),
+    baseVersion: integer('base_version').notNull(),
+    currentSnapshot: jsonb('current_snapshot').notNull(),
+    action: text('action').notNull(),
+    proposedPatch: jsonb('proposed_patch').notNull().default({}),
+    reasonCodes: text('reason_codes').array().notNull().default([]),
+    explanation: text('explanation').notNull(),
+    confidence: numeric('confidence', { precision: 4, scale: 3 }).notNull(),
+    riskLevel: text('risk_level').notNull(),
+    requiresApproval: boolean('requires_approval').notNull(),
+    validation: jsonb('validation').notNull().default({}),
+    status: text('status').notNull().default('planned'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('governance_proposals_run_template_uidx').on(t.runId, t.templateId),
+    index('governance_proposals_template_status_idx').on(t.templateId, t.status),
+    index('governance_proposals_run_status_idx').on(t.runId, t.status),
+    check('governance_proposals_base_version_check', sql`${t.baseVersion} > 0`),
+    check('governance_proposals_confidence_check', sql`${t.confidence} >= 0 and ${t.confidence} <= 1`),
+    check('governance_proposals_risk_level_check', sql`${t.riskLevel} in ('low','medium','high')`),
+    check('governance_proposals_status_check', sql`${t.status} in ('planned','accepted','skipped','awaiting_approval','approved','rejected','applied','conflict','failed','rolled_back')`),
+  ],
+);
+
+export const governanceChangeSetItems = pgTable(
+  'governance_change_set_items',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    changeSetId: uuid('change_set_id').notNull().references(() => governanceChangeSets.id, { onDelete: 'cascade' }),
+    proposalId: uuid('proposal_id').notNull().references(() => governanceProposals.id, { onDelete: 'cascade' }),
+    templateId: text('template_id').notNull().references(() => promptTemplates.id, { onDelete: 'cascade' }),
+    status: text('status').notNull().default('pending'),
+    appliedVersion: integer('applied_version'),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('governance_change_set_items_change_set_proposal_uidx').on(t.changeSetId, t.proposalId),
+    index('governance_change_set_items_change_set_status_idx').on(t.changeSetId, t.status),
+    check('governance_change_set_items_status_check', sql`${t.status} in ('pending','awaiting_approval','queued','running','applied','skipped','conflict','failed','rolled_back')`),
+  ],
+);
+
+export const governanceApprovals = pgTable(
+  'governance_approvals',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    changeSetId: uuid('change_set_id').notNull().references(() => governanceChangeSets.id, { onDelete: 'cascade' }),
+    decision: text('decision').notNull(),
+    approvedScope: jsonb('approved_scope').notNull(),
+    reviewerId: uuid('reviewer_id').notNull().references(() => adminUsers.id),
+    note: text('note').notNull().default(''),
+    ruleSetVersion: integer('rule_set_version').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('governance_approvals_change_set_created_idx').on(t.changeSetId, t.createdAt),
+    check('governance_approvals_decision_check', sql`${t.decision} in ('approved','rejected')`),
+  ],
+);
+
+export const governanceAuditEvents = pgTable(
+  'governance_audit_events',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    actorType: text('actor_type').notNull(),
+    actorId: uuid('actor_id').references(() => adminUsers.id),
+    eventType: text('event_type').notNull(),
+    targetType: text('target_type').notNull(),
+    targetId: text('target_id').notNull(),
+    runId: uuid('run_id').references(() => agentRuns.id),
+    changeSetId: uuid('change_set_id').references(() => governanceChangeSets.id),
+    proposalId: uuid('proposal_id').references(() => governanceProposals.id),
+    payload: jsonb('payload').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('governance_audit_events_target_created_idx').on(t.targetType, t.targetId, t.createdAt),
+    index('governance_audit_events_change_set_created_idx').on(t.changeSetId, t.createdAt),
+    check('governance_audit_events_actor_type_check', sql`${t.actorType} in ('admin','agent','system')`),
   ],
 );
 

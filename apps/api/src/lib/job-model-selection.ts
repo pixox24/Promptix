@@ -17,10 +17,13 @@ export function defaultRoleForJob(jobType: JobType): JobModelRole | null {
     case 'structure':
     case 'image_reverse':
     case 'provider_test':
+    case 'template_governance_plan':
       return 'text';
     case 'image_generate':
       return 'image';
     case 'noop':
+    case 'template_governance_apply':
+    case 'template_governance_rollback':
       return null;
   }
 }
@@ -30,12 +33,15 @@ export function requiredCapabilitiesForJob(jobType: JobType): ModelCapability[] 
     case 'text_expand':
     case 'structure':
     case 'image_reverse':
+    case 'template_governance_plan':
       return ['text', 'structured_output'];
     case 'provider_test':
       return ['text'];
     case 'image_generate':
       return ['image'];
     case 'noop':
+    case 'template_governance_apply':
+    case 'template_governance_rollback':
       return [];
   }
 }
