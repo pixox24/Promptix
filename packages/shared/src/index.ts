@@ -398,6 +398,9 @@ export const jobTypeSchema = z.enum([
   'image_generate',
   'structure',
   'provider_test',
+  'template_governance_plan',
+  'template_governance_apply',
+  'template_governance_rollback',
 ]);
 export type JobType = z.infer<typeof jobTypeSchema>;
 
@@ -608,3 +611,5 @@ export const apiErrorSchema = z.object({
   }),
 });
 export type ApiErrorBody = z.infer<typeof apiErrorSchema>;
+
+export * from './template-governance.js';
