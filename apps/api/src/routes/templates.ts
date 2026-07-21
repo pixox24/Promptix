@@ -3,13 +3,14 @@ import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { modelCapabilitySchema, taxonomySlugSchema, templateDraftSchema, type SemanticClassification } from '@promptix/shared';
 import { getDb } from '../db/client.js';
-import { generationJobs, mediaObjects, promptTemplates, providerModels, providers, taxonomyTerms, templateAssets, templateTaxonomyAssignments } from '../db/schema.js';
+import { generationJobs, governanceAuditEvents, mediaObjects, promptTemplates, providerModels, providers, taxonomyTerms, templateAssets, templateTaxonomyAssignments, templateVersions } from '../db/schema.js';
 import { requireAdmin, type AdminVars } from '../lib/auth.js';
 import { deleteObject, putObject, storageKind } from '../lib/storage.js';
 import { fail, ok } from '../lib/response.js';
 import { enqueueGenerationJob } from '../lib/job-enqueue.js';
 import { buildTemplateCoverRequest } from '../lib/template-cover.js';
 import { assertConfirmableSemantic, legacyCategoryForOutputType, resolveSemanticTerms, TaxonomyValidationError } from '../lib/taxonomy.js';
+import { buildTemplateVersionSnapshot, recordInitialTemplateVersion, updateTemplateWithVersion } from '../lib/template-versioning.js';
 
 const templateInput = templateDraftSchema.extend({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,79}$/).optional(),
@@ -39,6 +40,13 @@ const templatePatchInput = templateDraftSchema.partial().extend({
   autoCover: z.boolean().optional(),
   coverMode: z.enum(['auto_if_missing', 'auto_preview', 'disabled']).optional(),
   taxonomyConfirmed: z.boolean().optional(),
+  expectedVersion: z.number().int().positive(),
+  idempotencyKey: z.string().trim().min(8).max(200),
+});
+
+const versionedActionInput = z.object({
+  expectedVersion: z.number().int().positive(),
+  idempotencyKey: z.string().trim().min(8).max(200),
 });
 
 function slug(value: string) {
@@ -272,6 +280,17 @@ adminTemplateRoutes.post('/', async (c) => {
               : resolved.semantic.confidence.subjects?.toString(),
         })));
       }
+      await recordInitialTemplateVersion({
+        insertVersion: async (version) => {
+          await tx.insert(templateVersions).values({
+            templateId: version.templateId,
+            version: version.version,
+            snapshot: version.snapshot,
+            source: version.actor.source,
+            actorId: version.actor.actorId,
+          });
+        },
+      }, created, resolved.semantic, { source: 'admin', actorId: admin.sub });
       return created;
     });
     let coverJob: typeof generationJobs.$inferSelect | null = null;
@@ -305,7 +324,7 @@ adminTemplateRoutes.get('/:id', async (c) => {
 adminTemplateRoutes.patch('/:id', async (c) => {
   const parsed = templatePatchInput.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return fail(c, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid template', 400);
-  const { id: _ignored, autoCover: _autoCover, coverMode: _coverMode, taxonomyConfirmed, semantic, ...d } = parsed.data;
+  const { id: _ignored, autoCover: _autoCover, coverMode: _coverMode, taxonomyConfirmed, semantic, expectedVersion, idempotencyKey, ...d } = parsed.data;
   if (d.isFeatured === false) d.featuredOrder = 0;
   try {
     let resolved: Awaited<ReturnType<typeof resolveSemanticTerms>> | null = null;
@@ -313,7 +332,11 @@ adminTemplateRoutes.patch('/:id', async (c) => {
       resolved = await resolveSemanticTerms(semantic);
       if (taxonomyConfirmed) assertConfirmableSemantic(resolved.semantic);
     }
-    const row = await getDb().transaction(async (tx) => {
+    const existingRows = await getDb().select().from(promptTemplates).where(eq(promptTemplates.id, c.req.param('id'))).limit(1);
+    if (!existingRows[0]) return fail(c, 'NOT_FOUND', 'Template not found', 404);
+    const existingSemantics = await semanticViews(existingRows);
+    const nextSemantic = resolved?.semantic ?? existingSemantics.get(c.req.param('id')) ?? null;
+    const mutation = await getDb().transaction(async (tx) => {
       const semanticPatch = resolved ? {
         category: legacyCategoryForOutputType(resolved.semantic.outputType),
         workflowType: resolved.semantic.workflowType,
@@ -327,20 +350,66 @@ adminTemplateRoutes.patch('/:id', async (c) => {
         taxonomyReviewedAt: taxonomyConfirmed ? new Date() : null,
         taxonomyReviewedBy: taxonomyConfirmed ? c.get('admin').sub : null,
       } : {};
-      const [updated] = await tx.update(promptTemplates).set({ ...d, ...semanticPatch, updatedAt:new Date() })
-        .where(eq(promptTemplates.id, c.req.param('id'))).returning();
-      if (!updated) return null;
-      if (resolved) {
-        await tx.delete(templateTaxonomyAssignments).where(eq(templateTaxonomyAssignments.templateId, updated.id));
-        if (resolved.assignments.length) {
-          await tx.insert(templateTaxonomyAssignments).values(resolved.assignments.map((term) => ({
-            templateId: updated.id, termId: term.id, source: taxonomyConfirmed ? 'admin' : 'ai',
-          })));
-        }
-      }
-      return updated;
+      return updateTemplateWithVersion({
+        findIdempotentResult: async (key) => {
+          const [event] = await tx.select({ payload: governanceAuditEvents.payload })
+            .from(governanceAuditEvents)
+            .where(and(
+              eq(governanceAuditEvents.eventType, 'template.updated'),
+              eq(governanceAuditEvents.targetId, c.req.param('id')),
+              sql`${governanceAuditEvents.payload}->>'idempotencyKey' = ${key}`,
+            )).limit(1);
+          const payload = event?.payload as { result?: typeof promptTemplates.$inferSelect } | undefined;
+          return payload?.result ?? null;
+        },
+        loadTemplate: async (id) => {
+          const [current] = await tx.select().from(promptTemplates).where(eq(promptTemplates.id, id)).limit(1);
+          return current ?? null;
+        },
+        updateIfVersion: async (id, version, patch) => {
+          const [updated] = await tx.update(promptTemplates).set({
+            ...patch,
+            currentVersion: sql`${promptTemplates.currentVersion} + 1`,
+            updatedAt: new Date(),
+          }).where(and(eq(promptTemplates.id, id), eq(promptTemplates.currentVersion, version))).returning();
+          return updated ?? null;
+        },
+        replaceSemantic: resolved ? async (templateId) => {
+          await tx.delete(templateTaxonomyAssignments).where(eq(templateTaxonomyAssignments.templateId, templateId));
+          if (resolved.assignments.length) {
+            await tx.insert(templateTaxonomyAssignments).values(resolved.assignments.map((term) => ({
+              templateId, termId: term.id, source: taxonomyConfirmed ? 'admin' : 'ai',
+            })));
+          }
+        } : undefined,
+        insertVersion: async (version) => {
+          await tx.insert(templateVersions).values({
+            templateId: version.templateId,
+            version: version.version,
+            snapshot: version.snapshot,
+            source: version.actor.source,
+            actorId: version.actor.actorId,
+          });
+        },
+        recordIdempotentResult: async (key, result) => {
+          await tx.insert(governanceAuditEvents).values({
+            actorType: 'admin', actorId: c.get('admin').sub,
+            eventType: 'template.updated', targetType: 'template', targetId: result.id,
+            payload: { idempotencyKey: key, result },
+          });
+        },
+      }, {
+        id: c.req.param('id'), expectedVersion, idempotencyKey,
+        patch: { ...d, ...semanticPatch }, semantic: nextSemantic,
+        actor: { source: 'admin', actorId: c.get('admin').sub },
+      });
     });
-    if (!row) return fail(c, 'NOT_FOUND', 'Template not found', 404);
+    if (!mutation.ok) {
+      return mutation.code === 'NOT_FOUND'
+        ? fail(c, 'NOT_FOUND', 'Template not found', 404)
+        : fail(c, 'VERSION_CONFLICT', `Template changed on the server (version ${mutation.currentVersion ?? 'unknown'})`, 409);
+    }
+    const row = mutation.template;
     const semantics = await semanticViews([row]);
     return ok(c, { ...row, semantic: semantics.get(row.id) });
   } catch (error) {
@@ -358,7 +427,51 @@ adminTemplateRoutes.delete('/:id', async (c) => {
   return ok(c, { ok:true });
 });
 
+async function writeLifecycleVersion(input: {
+  template: typeof promptTemplates.$inferSelect;
+  expectedVersion: number;
+  idempotencyKey: string;
+  status: 'published' | 'archived';
+  actorId: string;
+}) {
+  const semantics = await semanticViews([input.template]);
+  return getDb().transaction(async (tx) => {
+    const [replayed] = await tx.select({ id: governanceAuditEvents.id }).from(governanceAuditEvents).where(and(
+      eq(governanceAuditEvents.eventType, `template.${input.status}`),
+      eq(governanceAuditEvents.targetId, input.template.id),
+      sql`${governanceAuditEvents.payload}->>'idempotencyKey' = ${input.idempotencyKey}`,
+    )).limit(1);
+    if (replayed) {
+      const [current] = await tx.select().from(promptTemplates).where(eq(promptTemplates.id, input.template.id)).limit(1);
+      return current ?? null;
+    }
+    const [updated] = await tx.update(promptTemplates).set({
+      status: input.status,
+      publishedAt: input.status === 'published' ? new Date() : input.template.publishedAt,
+      currentVersion: sql`${promptTemplates.currentVersion} + 1`,
+      updatedAt: new Date(),
+    }).where(and(
+      eq(promptTemplates.id, input.template.id),
+      eq(promptTemplates.currentVersion, input.expectedVersion),
+    )).returning();
+    if (!updated) return null;
+    await tx.insert(templateVersions).values({
+      templateId: updated.id, version: updated.currentVersion,
+      snapshot: buildTemplateVersionSnapshot(updated, semantics.get(updated.id) ?? null),
+      source: 'admin', actorId: input.actorId,
+    });
+    await tx.insert(governanceAuditEvents).values({
+      actorType: 'admin', actorId: input.actorId,
+      eventType: `template.${input.status}`, targetType: 'template', targetId: updated.id,
+      payload: { idempotencyKey: input.idempotencyKey, version: updated.currentVersion },
+    });
+    return updated;
+  });
+}
+
 adminTemplateRoutes.post('/:id/publish', async (c) => {
+  const action = versionedActionInput.safeParse(await c.req.json().catch(() => null));
+  if (!action.success) return fail(c, 'VALIDATION_ERROR', 'expectedVersion and idempotencyKey are required', 400);
   const [existing] = await getDb().select().from(promptTemplates).where(eq(promptTemplates.id, c.req.param('id'))).limit(1);
   if (!existing) return fail(c, 'NOT_FOUND', 'Template not found', 404);
   if (!existing.coverObjectKey || !existing.coverUrl) return fail(c, 'COVER_REQUIRED', 'A cover image is required before publishing', 409);
@@ -379,21 +492,38 @@ adminTemplateRoutes.post('/:id/publish', async (c) => {
   if (!outputTerm?.enabled || assignedTerms.some((term) => !term.enabled)) {
     return fail(c, 'TAXONOMY_TERM_DISABLED', '模板使用了已停用的分类词', 409);
   }
-  const [row] = await getDb().update(promptTemplates).set({ status:'published', publishedAt:new Date(), updatedAt:new Date() })
-    .where(eq(promptTemplates.id, existing.id)).returning();
-  return ok(c, row);
+  const row = await writeLifecycleVersion({ template: existing, ...action.data, status: 'published', actorId: c.get('admin').sub });
+  return row ? ok(c, row) : fail(c, 'VERSION_CONFLICT', 'Template changed on the server', 409);
 });
 
 adminTemplateRoutes.post('/:id/archive', async (c) => {
-  const [row] = await getDb().update(promptTemplates).set({ status:'archived', updatedAt:new Date() })
-    .where(eq(promptTemplates.id, c.req.param('id'))).returning();
-  return row ? ok(c, row) : fail(c, 'NOT_FOUND', 'Template not found', 404);
+  const action = versionedActionInput.safeParse(await c.req.json().catch(() => null));
+  if (!action.success) return fail(c, 'VALIDATION_ERROR', 'expectedVersion and idempotencyKey are required', 400);
+  const [existing] = await getDb().select().from(promptTemplates).where(eq(promptTemplates.id, c.req.param('id'))).limit(1);
+  if (!existing) return fail(c, 'NOT_FOUND', 'Template not found', 404);
+  const row = await writeLifecycleVersion({ template: existing, ...action.data, status: 'archived', actorId: c.get('admin').sub });
+  return row ? ok(c, row) : fail(c, 'VERSION_CONFLICT', 'Template changed on the server', 409);
 });
 
 adminTemplateRoutes.post('/:id/cover', async (c) => {
   const [template] = await getDb().select().from(promptTemplates).where(eq(promptTemplates.id, c.req.param('id'))).limit(1);
   if (!template) return fail(c, 'NOT_FOUND', 'Template not found', 404);
   const body = await c.req.parseBody(); const file = body.file;
+  const expectedVersion = Number(body.expectedVersion);
+  const idempotencyKey = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : '';
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1 || idempotencyKey.length < 8) {
+    return fail(c, 'VALIDATION_ERROR', 'expectedVersion and idempotencyKey are required', 400);
+  }
+  const [replayed] = await getDb().select({ payload: governanceAuditEvents.payload }).from(governanceAuditEvents)
+    .where(and(
+      eq(governanceAuditEvents.eventType, 'template.cover_updated'),
+      eq(governanceAuditEvents.targetId, template.id),
+      sql`${governanceAuditEvents.payload}->>'idempotencyKey' = ${idempotencyKey}`,
+    )).limit(1);
+  if (replayed) {
+    const [current] = await getDb().select().from(promptTemplates).where(eq(promptTemplates.id, template.id)).limit(1);
+    return ok(c, current, 201);
+  }
   if (!(file instanceof File)) return fail(c, 'FILE_REQUIRED', 'Image file is required', 400);
   if (!file.type.startsWith('image/')) return fail(c, 'INVALID_FILE_TYPE', 'Only image files are allowed', 415);
   if (file.size > 10 * 1024 * 1024) return fail(c, 'FILE_TOO_LARGE', 'Image must be at most 10MB', 413);
@@ -401,10 +531,33 @@ adminTemplateRoutes.post('/:id/cover', async (c) => {
   const key = `public/templates/${template.id}/cover-${Date.now()}.${ext}`;
   const stored = await putObject(key, Buffer.from(await file.arrayBuffer()), file.type);
   const db = getDb();
-  await db.delete(templateAssets).where(and(eq(templateAssets.templateId, template.id), eq(templateAssets.kind, 'cover')));
-  await db.insert(templateAssets).values({ templateId:template.id, objectKey:key, url:stored.url, kind:'cover', bytes:file.size });
-  await db.insert(mediaObjects).values({ objectKey:key, bucket:storageKind(), url:stored.url, storageClass:'permanent', prefixKind:'template', ownerType:'template', ownerId:template.id, mime:file.type, bytes:file.size }).onConflictDoUpdate({ target:mediaObjects.objectKey, set:{ url:stored.url, bytes:file.size, mime:file.type, deletedAt:null } });
-  const [row] = await db.update(promptTemplates).set({ coverObjectKey:key, coverUrl:stored.url, updatedAt:new Date() }).where(eq(promptTemplates.id, template.id)).returning();
+  const semantics = await semanticViews([template]);
+  const row = await db.transaction(async (tx) => {
+    const [updated] = await tx.update(promptTemplates).set({
+      coverObjectKey:key, coverUrl:stored.url,
+      currentVersion: sql`${promptTemplates.currentVersion} + 1`, updatedAt:new Date(),
+    }).where(and(eq(promptTemplates.id, template.id), eq(promptTemplates.currentVersion, expectedVersion))).returning();
+    if (!updated) return null;
+    await tx.delete(templateAssets).where(and(eq(templateAssets.templateId, template.id), eq(templateAssets.kind, 'cover')));
+    await tx.insert(templateAssets).values({ templateId:template.id, objectKey:key, url:stored.url, kind:'cover', bytes:file.size });
+    await tx.insert(mediaObjects).values({ objectKey:key, bucket:storageKind(), url:stored.url, storageClass:'permanent', prefixKind:'template', ownerType:'template', ownerId:template.id, mime:file.type, bytes:file.size }).onConflictDoUpdate({ target:mediaObjects.objectKey, set:{ url:stored.url, bytes:file.size, mime:file.type, deletedAt:null } });
+    await tx.insert(templateVersions).values({
+      templateId: updated.id, version: updated.currentVersion,
+      snapshot: buildTemplateVersionSnapshot(updated, semantics.get(updated.id) ?? null),
+      source: 'admin', actorId: c.get('admin').sub,
+    });
+    await tx.insert(governanceAuditEvents).values({
+      actorType: 'admin', actorId: c.get('admin').sub,
+      eventType: 'template.cover_updated', targetType: 'template', targetId: updated.id,
+      payload: { idempotencyKey, version: updated.currentVersion },
+    });
+    return updated;
+  });
+  if (!row) {
+    await deleteObject(key);
+    const [current] = await db.select({ currentVersion: promptTemplates.currentVersion }).from(promptTemplates).where(eq(promptTemplates.id, template.id)).limit(1);
+    return fail(c, 'VERSION_CONFLICT', `Template changed on the server (version ${current?.currentVersion ?? 'unknown'})`, 409);
+  }
   if (template.coverObjectKey && template.coverObjectKey !== key) await deleteObject(template.coverObjectKey);
   return ok(c, row, 201);
 });

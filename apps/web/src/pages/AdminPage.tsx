@@ -12,7 +12,7 @@ import type { PromptVariable } from "../types/prompt";
 import type { SemanticClassification } from "@promptix/shared";
 import { ProviderModelsPage } from "./admin/ProviderModelsPage";
 import type { AdminModel } from "../types/adminModels";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { IngestPage } from "./admin/IngestPage";
 import { fetchTaxonomy, type TaxonomyTerm } from "../data/taxonomyApi";
 import { TaxonomyPage } from "./admin/TaxonomyPage";
@@ -39,6 +39,7 @@ type Template = {
   updatedAt: string;
   coverJob?: Job | null;
   taxonomyReviewStatus?: "pending" | "needs_attention" | "reviewed";
+  currentVersion: number;
 };
 type Job = {
   id: string;
@@ -309,9 +310,12 @@ function TemplateList() {
   }, []);
   const outputTypes = taxonomyTerms.filter((term) => term.dimension === "output_type");
   const outputLabels = new Map(outputTypes.map((term) => [term.slug, term.label]));
-  async function action(id: string, op: string) {
+  async function action(template: Template, op: string) {
     try {
-      await api(`/api/admin/templates/${id}/${op}`, { method: "POST" });
+      await api(`/api/admin/templates/${template.id}/${op}`, {
+        method: "POST",
+        body: JSON.stringify({ expectedVersion: template.currentVersion, idempotencyKey: crypto.randomUUID() }),
+      });
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "操作失败");
@@ -324,6 +328,8 @@ function TemplateList() {
         body: JSON.stringify({
           isFeatured: !template.isFeatured,
           featuredOrder: template.isFeatured ? 0 : template.featuredOrder,
+          expectedVersion: template.currentVersion,
+          idempotencyKey: crypto.randomUUID(),
         }),
       });
       load();
@@ -443,7 +449,7 @@ function TemplateList() {
                   </Link>
                   {t.status !== "published" ? (
                     <div className="inline-flex items-center gap-3">
-                      <button onClick={() => action(t.id, "publish")} className="text-emerald-600">发布</button>
+                      <button onClick={() => action(t, "publish")} className="text-emerald-600">发布</button>
                       {t.status === "archived" && (
                         <button
                           onClick={() => permanentlyDelete(t)}
@@ -454,7 +460,7 @@ function TemplateList() {
                       )}
                     </div>
                   ) : (
-                    <button onClick={() => action(t.id, "archive")} className="text-amber-600">下架</button>
+                    <button onClick={() => action(t, "archive")} className="text-amber-600">下架</button>
                   )}
                 </td>
               </tr>
@@ -522,7 +528,9 @@ function TemplateEditor() {
     setBusy(true);
     setMessage("");
     try {
-      const payload = { ...form, taxonomyConfirmed };
+      const payload = id
+        ? { ...form, taxonomyConfirmed, expectedVersion: existing?.currentVersion, idempotencyKey: crypto.randomUUID() }
+        : { ...form, taxonomyConfirmed };
       const t = await api<Template>(
         id ? `/api/admin/templates/${id}` : "/api/admin/templates",
         { method: id ? "PATCH" : "POST", body: JSON.stringify(payload) },
@@ -531,7 +539,9 @@ function TemplateEditor() {
       setMessage("已保存");
       if (!id) navigate(`/admin/templates/${t.id}`, { replace: true });
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "保存失败");
+      setMessage(e instanceof ApiError && e.code === "VERSION_CONFLICT"
+        ? "服务器上的模板已被其他操作更新。你的本地编辑仍保留，请刷新页面核对最新版本后再保存。"
+        : e instanceof Error ? e.message : "保存失败");
     } finally {
       setBusy(false);
     }
@@ -543,6 +553,8 @@ function TemplateEditor() {
     }
     const body = new FormData();
     body.set("file", file);
+    body.set("expectedVersion", String(existing?.currentVersion ?? 0));
+    body.set("idempotencyKey", crypto.randomUUID());
     try {
       const t = await api<Template>(`/api/admin/templates/${id}/cover`, {
         method: "POST",
@@ -559,6 +571,7 @@ function TemplateEditor() {
     try {
       const t = await api<Template>(`/api/admin/templates/${id}/publish`, {
         method: "POST",
+        body: JSON.stringify({ expectedVersion: existing?.currentVersion, idempotencyKey: crypto.randomUUID() }),
       });
       setExisting(t);
       setMessage("发布成功");
