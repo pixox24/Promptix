@@ -20,11 +20,17 @@ test('parses every governance filter and bounded page size', async () => {
 });
 
 test('opaque cursors round-trip and reject malformed values', async () => {
-  const { encodeGovernanceCursor, decodeGovernanceCursor } = await import(queryModule);
+  const { encodeGovernanceCursor, decodeGovernanceCursor, governanceQueryFingerprint, governanceSortKey } = await import(queryModule);
   const value = { updatedAt: '2026-07-21T00:00:00.000Z', id: 'template-a' };
   const encoded = encodeGovernanceCursor(value);
   assert.doesNotMatch(encoded, /template-a/);
   assert.deepEqual(decodeGovernanceCursor(encoded), value);
+  const query = { scenarios: [], styles: [], subjects: [], sort: 'quality_asc' };
+  const versioned = { version: 2, sort: query.sort, fingerprint: governanceQueryFingerprint(query), key: 1, id: 'template-b' };
+  assert.deepEqual(decodeGovernanceCursor(encodeGovernanceCursor(versioned)), versioned);
+  const row = { updatedAt: new Date(value.updatedAt), coverUrl: '/cover.webp', summary: '', classificationMeta: { confidence: { outputType: 0.72 } } };
+  assert.equal(governanceSortKey(row, 'quality_asc'), 1);
+  assert.equal(governanceSortKey(row, 'confidence_desc'), 0.72);
   assert.throws(() => decodeGovernanceCursor('not-a-cursor'), /Invalid cursor/);
 });
 

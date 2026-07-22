@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ilike, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, isNull, or, sql, type SQL } from 'drizzle-orm';
 import {
   governanceTemplateQuerySchema,
   taxonomySlugSchema,
@@ -14,14 +14,18 @@ export class GovernanceQueryValidationError extends Error {
 export type GovernancePageQuery = {
   query: GovernanceTemplateQuery;
   pageSize: number;
-  cursor?: { updatedAt: string; id: string };
+  cursor?: GovernanceCursor;
 };
+
+export type GovernanceCursor =
+  | { updatedAt: string; id: string }
+  | { version: 2; sort: GovernanceTemplateQuery['sort']; fingerprint: string; key: string | number; id: string };
 
 const csv = (value: string | undefined) => value
   ? [...new Set(value.split(',').map((item) => item.trim()).filter(Boolean))]
   : [];
 
-export function encodeGovernanceCursor(value: { updatedAt: string; id: string }) {
+export function encodeGovernanceCursor(value: GovernanceCursor) {
   return Buffer.from(JSON.stringify(value)).toString('base64url');
 }
 
@@ -29,11 +33,28 @@ export function decodeGovernanceCursor(value: string | undefined) {
   if (!value) return undefined;
   try {
     const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Record<string, unknown>;
-    if (typeof parsed.updatedAt !== 'string' || Number.isNaN(Date.parse(parsed.updatedAt)) || typeof parsed.id !== 'string' || !parsed.id) throw new Error();
+    if (typeof parsed.id !== 'string' || !parsed.id) throw new Error();
+    if (parsed.version === 2) {
+      if (!['updated_desc', 'updated_asc', 'quality_asc', 'confidence_desc'].includes(String(parsed.sort)) || typeof parsed.fingerprint !== 'string' || (typeof parsed.key !== 'string' && typeof parsed.key !== 'number')) throw new Error();
+      return { version: 2 as const, sort: parsed.sort as GovernanceTemplateQuery['sort'], fingerprint: parsed.fingerprint, key: parsed.key, id: parsed.id };
+    }
+    if (typeof parsed.updatedAt !== 'string' || Number.isNaN(Date.parse(parsed.updatedAt))) throw new Error();
     return { updatedAt: parsed.updatedAt, id: parsed.id };
   } catch {
     throw new GovernanceQueryValidationError('Invalid cursor');
   }
+}
+
+export function governanceQueryFingerprint(query: GovernanceTemplateQuery) {
+  return Buffer.from(JSON.stringify(query, Object.keys(query).sort())).toString('base64url');
+}
+
+export function governanceSortKey(row: { updatedAt: Date; coverUrl: string | null; summary: string; classificationMeta?: unknown }, sort: GovernanceTemplateQuery['sort']): string | number {
+  if (sort === 'updated_desc' || sort === 'updated_asc') return row.updatedAt.toISOString();
+  if (sort === 'quality_asc') return row.coverUrl == null ? 0 : row.summary === '' ? 1 : 2;
+  const meta = row.classificationMeta && typeof row.classificationMeta === 'object' ? row.classificationMeta as { confidence?: { outputType?: unknown } } : {};
+  const value = Number(meta.confidence?.outputType ?? 0);
+  return Number.isFinite(value) ? value : 0;
 }
 
 export function parseGovernancePageQuery(params: URLSearchParams): GovernancePageQuery {
@@ -75,16 +96,32 @@ function taxonomyExists(dimension: 'scenario' | 'style' | 'subject', slugs: stri
 export function governanceQueuePredicate(queue: GovernanceQueueId): SQL {
   switch (queue) {
     case 'taxonomy_confirmation': return sql`${promptTemplates.taxonomyReviewStatus} <> 'reviewed'`;
-    case 'duplicate_candidates': return sql`exists (select 1 from ${governanceProposals} where ${governanceProposals.templateId} = ${promptTemplates.id} and 'DUPLICATE_CANDIDATE' = any(${governanceProposals.reasonCodes}))`;
+    case 'duplicate_candidates': return sql`exists (
+      select 1 from governance_change_set_items i join governance_proposals p on p.id = i.proposal_id
+      where p.template_id = ${promptTemplates.id}
+        and i.id = (select i2.id from governance_change_set_items i2 join governance_proposals p2 on p2.id = i2.proposal_id where p2.template_id = ${promptTemplates.id} order by p2.created_at desc, i2.id desc limit 1)
+        and i.status in ('pending','awaiting_approval','queued','running')
+        and 'DUPLICATE_CANDIDATE' = any(p.reason_codes)
+    )`;
     case 'quality_issues': return or(eq(promptTemplates.summary, ''), sql`${promptTemplates.coverUrl} is null`, sql`length(${promptTemplates.promptTemplate}) < 20`)!;
     case 'featured_candidates': return and(eq(promptTemplates.status, 'published'), eq(promptTemplates.isFeatured, false), sql`${promptTemplates.coverUrl} is not null`, eq(promptTemplates.taxonomyReviewStatus, 'reviewed'))!;
-    case 'pending_approval': return sql`exists (select 1 from ${governanceProposals} where ${governanceProposals.templateId} = ${promptTemplates.id} and ${governanceProposals.status} = 'awaiting_approval')`;
-    case 'failed_items': return sql`exists (select 1 from ${governanceProposals} where ${governanceProposals.templateId} = ${promptTemplates.id} and ${governanceProposals.status} in ('failed','conflict'))`;
+    case 'pending_approval': return sql`exists (
+      select 1 from governance_change_set_items i join governance_proposals p on p.id = i.proposal_id
+      where p.template_id = ${promptTemplates.id}
+        and i.id = (select i2.id from governance_change_set_items i2 join governance_proposals p2 on p2.id = i2.proposal_id where p2.template_id = ${promptTemplates.id} order by p2.created_at desc, i2.id desc limit 1)
+        and i.status = 'awaiting_approval'
+    )`;
+    case 'failed_items': return sql`exists (
+      select 1 from governance_change_set_items i join governance_proposals p on p.id = i.proposal_id
+      where p.template_id = ${promptTemplates.id}
+        and i.id = (select i2.id from governance_change_set_items i2 join governance_proposals p2 on p2.id = i2.proposal_id where p2.template_id = ${promptTemplates.id} order by p2.created_at desc, i2.id desc limit 1)
+        and i.status in ('failed','conflict')
+    )`;
   }
 }
 
 export function buildGovernanceFilters(query: GovernanceTemplateQuery): SQL[] {
-  const filters: SQL[] = [];
+  const filters: SQL[] = [isNull(promptTemplates.deletedAt)];
   if (query.queue) filters.push(governanceQueuePredicate(query.queue));
   if (query.q) filters.push(or(ilike(promptTemplates.name, `%${query.q}%`), ilike(promptTemplates.summary, `%${query.q}%`), ilike(promptTemplates.promptTemplate, `%${query.q}%`))!);
   if (query.source) filters.push(eq(promptTemplates.source, query.source));

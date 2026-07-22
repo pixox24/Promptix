@@ -1,4 +1,4 @@
-import { and, desc, eq, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { governanceTemplateQuerySchema, type GovernanceTemplateQuery } from '@promptix/shared';
 import { getDb } from '../db/client.js';
 import {
@@ -10,19 +10,43 @@ import {
   promptTemplates,
   templateVersions,
 } from '../db/schema.js';
-import { buildGovernanceFilters, encodeGovernanceCursor, governanceOrder } from './governance-query.js';
+import { buildGovernanceFilters, encodeGovernanceCursor, governanceOrder, governanceQueryFingerprint, governanceSortKey, GovernanceQueryValidationError, type GovernanceCursor } from './governance-query.js';
 import type { GovernanceService } from './governance-service.js';
 
 export async function search_templates(input: {
   query: GovernanceTemplateQuery;
   pageSize: number;
-  cursor?: { updatedAt: string; id: string };
+  cursor?: GovernanceCursor;
 }) {
   const query = governanceTemplateQuerySchema.parse(input.query);
   const filters = buildGovernanceFilters(query);
-  if (input.cursor && query.sort === 'updated_desc') {
-    const date = new Date(input.cursor.updatedAt);
-    filters.push(or(lt(promptTemplates.updatedAt, date), and(eq(promptTemplates.updatedAt, date), lt(promptTemplates.id, input.cursor.id)))!);
+  const fingerprint = governanceQueryFingerprint(query);
+  if (input.cursor) {
+    const cursor = input.cursor;
+    if ('version' in cursor && (cursor.sort !== query.sort || cursor.fingerprint !== fingerprint)) throw new GovernanceQueryValidationError('Cursor does not match this query');
+    if ('version' in cursor) {
+      const key = cursor.key;
+      if (query.sort === 'updated_desc') {
+        const date = new Date(String(key));
+        filters.push(or(lt(promptTemplates.updatedAt, date), and(eq(promptTemplates.updatedAt, date), lt(promptTemplates.id, cursor.id)))!);
+      } else if (query.sort === 'updated_asc') {
+        const date = new Date(String(key));
+        filters.push(or(sql`${promptTemplates.updatedAt} > ${date}`, and(eq(promptTemplates.updatedAt, date), sql`${promptTemplates.id} > ${cursor.id}`))!);
+      } else if (query.sort === 'quality_asc') {
+        const qualityKey = Number(key);
+        const quality = sql`case when ${promptTemplates.coverUrl} is null then 0 when ${promptTemplates.summary} = '' then 1 else 2 end`;
+        filters.push(or(sql`${quality} > ${qualityKey}`, and(sql`${quality} = ${qualityKey}`, sql`${promptTemplates.id} > ${cursor.id}`))!);
+      } else {
+        const confidenceKey = Number(key);
+        const confidence = sql`coalesce((${promptTemplates.classificationMeta}->'confidence'->>'outputType')::numeric, 0)`;
+        filters.push(or(sql`${confidence} < ${confidenceKey}`, and(sql`${confidence} = ${confidenceKey}`, sql`${promptTemplates.id} > ${cursor.id}`))!);
+      }
+    } else if (query.sort === 'updated_desc') {
+      const date = new Date(cursor.updatedAt);
+      filters.push(or(lt(promptTemplates.updatedAt, date), and(eq(promptTemplates.updatedAt, date), lt(promptTemplates.id, cursor.id)))!);
+    } else {
+      throw new GovernanceQueryValidationError('Cursor does not support this sort');
+    }
   }
   const where = filters.length ? and(...filters) : undefined;
   const db = getDb();
@@ -40,6 +64,7 @@ export async function search_templates(input: {
       coverUrl: promptTemplates.coverUrl,
       currentVersion: promptTemplates.currentVersion,
       updatedAt: promptTemplates.updatedAt,
+      classificationMeta: promptTemplates.classificationMeta,
     }).from(promptTemplates).where(where).orderBy(...governanceOrder(query)).limit(input.pageSize + 1),
   ]);
   const hasMore = rows.length > input.pageSize;
@@ -48,17 +73,17 @@ export async function search_templates(input: {
   return {
     items,
     total: Number(count?.total ?? 0),
-    nextCursor: hasMore && last ? encodeGovernanceCursor({ updatedAt: last.updatedAt.toISOString(), id: last.id }) : null,
+    nextCursor: hasMore && last ? encodeGovernanceCursor({ version: 2, sort: query.sort, fingerprint, key: governanceSortKey(last, query.sort), id: last.id }) : null,
     querySnapshot: { ...query, capturedAt: new Date().toISOString() },
   };
 }
 
 export async function inspect_template(input: { templateId: string }) {
   const db = getDb();
-  const [template] = await db.select().from(promptTemplates).where(eq(promptTemplates.id, input.templateId)).limit(1);
+  const [template] = await db.select().from(promptTemplates).where(and(eq(promptTemplates.id, input.templateId), isNull(promptTemplates.deletedAt))).limit(1);
   if (!template) return null;
   const [proposal, history] = await Promise.all([
-    db.select().from(governanceProposals).where(eq(governanceProposals.templateId, template.id)).orderBy(desc(governanceProposals.createdAt)).limit(1),
+    db.select().from(governanceProposals).where(and(eq(governanceProposals.templateId, template.id), inArray(governanceProposals.status, ['planned', 'accepted', 'awaiting_approval', 'approved']))).orderBy(desc(governanceProposals.createdAt)).limit(1),
     db.select().from(templateVersions).where(eq(templateVersions.templateId, template.id)).orderBy(desc(templateVersions.version)).limit(20),
   ]);
   let approval = null;

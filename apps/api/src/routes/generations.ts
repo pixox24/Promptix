@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Hono, type Context } from "hono";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { jwtVerify, SignJWT } from "jose";
 import {
   modelCapabilitySchema,
@@ -189,6 +189,7 @@ generationRoutes.post("/", async (c) => {
       and(
         eq(promptTemplates.id, parsed.data.templateId),
         eq(promptTemplates.status, "published"),
+        isNull(promptTemplates.deletedAt),
       ),
     )
     .limit(1);

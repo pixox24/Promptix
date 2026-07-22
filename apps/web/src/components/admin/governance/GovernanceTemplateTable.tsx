@@ -8,7 +8,9 @@ export function GovernanceTemplateTable({ items, selection, selectedId, onToggle
   onTogglePage: () => void;
   onInspect: (id: string) => void;
 }) {
-  const selected = selection.mode === 'explicit' ? new Set(selection.templateIds) : new Set(items.map((item) => item.id));
+  const selected = selection.mode === 'explicit'
+    ? new Set(selection.templateIds)
+    : new Set(items.map((item) => item.id).filter((id) => !selection.exclusions.includes(id)));
   const pageSelected = items.length > 0 && items.every((item) => selected.has(item.id));
   return <div className="overflow-auto"><table className="w-full min-w-[980px] border-collapse text-left text-xs">
     <thead className="sticky top-0 z-10 bg-slate-50 text-slate-500"><tr className="border-b">

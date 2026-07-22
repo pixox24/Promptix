@@ -28,5 +28,12 @@ export function useTemplateGovernance() {
   const updateQuery = (patch: Partial<GovernanceTemplateQuery>) => { setSelection({ mode: 'explicit', templateIds: [], proposalIds: [] }); setParams(serializeGovernanceUrl(changeGovernanceQuery(state, patch))); };
   const refresh = useCallback(() => setReloadKey((value) => value + 1), []);
   const pageIds = page?.items.map((item) => item.id) ?? [];
-  return { state, page, queues, detail, status, error, selection, updateQuery, select: (id: string) => setParams(serializeGovernanceUrl({ ...state, selectedId: id })), toggleSelection: (id: string) => setSelection((current) => toggleExplicitSelection(current, id)), togglePage: () => setSelection((current) => { const selected = current.mode === 'explicit' ? new Set(current.templateIds) : new Set<string>(); const all = pageIds.length > 0 && pageIds.every((id) => selected.has(id)); return { mode: 'explicit', templateIds: all ? [...selected].filter((id) => !pageIds.includes(id)) : [...new Set([...selected, ...pageIds])], proposalIds: [] }; }), selectAll: () => setSelection(selectAllMatching(state.query, page?.querySnapshot.capturedAt ?? new Date().toISOString())), setSelection, nextPage: () => page?.nextCursor && setParams(serializeGovernanceUrl({ ...state, cursor: page.nextCursor, selectedId: null })), firstPage: () => setParams(serializeGovernanceUrl({ ...state, cursor: null, selectedId: null })), refresh };
+  return { state, page, queues, detail, status, error, selection, updateQuery, select: (id: string) => setParams(serializeGovernanceUrl({ ...state, selectedId: id })), toggleSelection: (id: string) => setSelection((current) => toggleExplicitSelection(current, id)), togglePage: () => setSelection((current) => {
+    if (current.mode === 'query') {
+      const all = pageIds.length > 0 && pageIds.every((id) => !current.exclusions.includes(id));
+      return { ...current, exclusions: all ? [...new Set([...current.exclusions, ...pageIds])] : current.exclusions.filter((id) => !pageIds.includes(id)) };
+    }
+    const selected = new Set(current.templateIds); const all = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+    return { mode: 'explicit', templateIds: all ? [...selected].filter((id) => !pageIds.includes(id)) : [...new Set([...selected, ...pageIds])], proposalIds: [] };
+  }), selectAll: () => setSelection(selectAllMatching(state.query, page?.querySnapshot.capturedAt ?? new Date().toISOString())), setSelection, nextPage: () => page?.nextCursor && setParams(serializeGovernanceUrl({ ...state, cursor: page.nextCursor, selectedId: null })), firstPage: () => setParams(serializeGovernanceUrl({ ...state, cursor: null, selectedId: null })), refresh };
 }

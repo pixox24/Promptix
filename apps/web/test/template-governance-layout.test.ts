@@ -19,6 +19,20 @@ test('table exposes governance columns and row inspection without navigation', a
   assert.doesNotMatch(table, /<Link|navigate\(/);
 });
 
+test('governance workspace exposes single and explicit-batch deletion requests', async () => {
+  const page = await readFile(new URL('../src/pages/admin/TemplateGovernancePage.tsx', import.meta.url), 'utf8');
+  const inspector = await readFile(new URL('../src/components/admin/governance/GovernanceInspector.tsx', import.meta.url), 'utf8');
+  const bulk = await readFile(new URL('../src/components/admin/governance/GovernanceBulkBar.tsx', import.meta.url), 'utf8');
+  const data = await readFile(new URL('../src/data/templateGovernanceApi.ts', import.meta.url), 'utf8');
+  assert.match(page, /提交删除审批/);
+  assert.match(page, /previewTemplateDeletion/);
+  assert.match(page, /requestTemplateDeletion/);
+  assert.match(inspector, /申请删除/);
+  assert.match(bulk, /selection\.mode !== 'explicit'/);
+  assert.match(data, /\/api\/admin\/templates\/deletion-requests\/preview/);
+  assert.match(data, /\/api\/admin\/templates\/deletion-requests/);
+});
+
 test('governance workspace exposes run feedback, polling, filters and pagination', async () => {
   const page = await readFile(new URL('../src/pages/admin/TemplateGovernancePage.tsx', import.meta.url), 'utf8');
   const runs = await readFile(new URL('../src/hooks/useGovernanceRuns.ts', import.meta.url), 'utf8');

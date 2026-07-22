@@ -41,12 +41,18 @@ const SNAPSHOT_FIELDS = [
 export function buildTemplateVersionSnapshot(
   template: VersionedTemplate,
   semantic: SemanticClassification | null,
+  taxonomyAssignments: TemplateVersionSnapshot['taxonomyAssignments'] = [],
 ): TemplateVersionSnapshot {
   const snapshot: Record<string, unknown> = {};
   for (const field of SNAPSHOT_FIELDS) snapshot[field] = template[field] ?? null;
   snapshot.templateId = template.id;
   snapshot.version = template.currentVersion;
   snapshot.semantic = semantic;
+  snapshot.snapshotSchemaVersion = 2;
+  snapshot.taxonomyAssignments = taxonomyAssignments;
+  snapshot.taxonomyReviewedAt = template.taxonomyReviewedAt instanceof Date ? template.taxonomyReviewedAt.toISOString() : template.taxonomyReviewedAt ?? null;
+  snapshot.taxonomyReviewedBy = template.taxonomyReviewedBy ?? null;
+  snapshot.publishedAt = template.publishedAt instanceof Date ? template.publishedAt.toISOString() : template.publishedAt ?? null;
   return snapshot as TemplateVersionSnapshot;
 }
 
@@ -55,11 +61,12 @@ export async function recordInitialTemplateVersion<T extends VersionedTemplate>(
   template: T,
   semantic: SemanticClassification | null,
   actor: TemplateVersionActor,
+  taxonomyAssignments: TemplateVersionSnapshot['taxonomyAssignments'] = [],
 ) {
   await repository.insertVersion({
     templateId: template.id,
     version: 1,
-    snapshot: buildTemplateVersionSnapshot({ ...template, currentVersion: 1 }, semantic),
+    snapshot: buildTemplateVersionSnapshot({ ...template, currentVersion: 1 }, semantic, taxonomyAssignments),
     actor,
   });
 }
@@ -72,6 +79,7 @@ export async function updateTemplateWithVersion<T extends VersionedTemplate>(
     idempotencyKey: string;
     patch: Partial<T>;
     semantic: SemanticClassification | null;
+    taxonomyAssignments?: TemplateVersionSnapshot['taxonomyAssignments'];
     actor: TemplateVersionActor;
   },
 ): Promise<VersionedMutationResult<T>> {
@@ -93,7 +101,7 @@ export async function updateTemplateWithVersion<T extends VersionedTemplate>(
   await repository.insertVersion({
     templateId: updated.id,
     version: updated.currentVersion,
-    snapshot: buildTemplateVersionSnapshot(updated, input.semantic),
+    snapshot: buildTemplateVersionSnapshot(updated, input.semantic, input.taxonomyAssignments),
     actor: input.actor,
   });
   await repository.recordIdempotentResult(input.idempotencyKey, updated);

@@ -20,7 +20,7 @@ const { runImageReversePipeline } = await import('./image-reverse-pipeline.js');
 const { IngestPipelineError } = await import('./job-errors.js');
 const { persistGovernancePlan } = await import('./governance-plan-persistence.js');
 const { executeGovernanceJob, rollbackGovernanceJob } = await import('./governance-job-execution.js');
-const { buildScheduledGovernanceInput } = await import('./scheduled-governance.js');
+const { buildScheduledGovernanceInput, releaseScheduledGovernanceLease } = await import('./scheduled-governance.js');
 
 const QUEUE_NAME='promptix-jobs';
 type WorkerPayload = { jobId: string } | { kind: 'governance_schedule'; ruleSetId: string; ruleSetVersion: number };
@@ -33,14 +33,16 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
     try {
       const model = await resolvePrimaryModel('template_governance_plan', parsedRules.agent.modelId, null);
       await db.update(agentRuns).set({ status: 'analyzing', modelId: model.model.id, startedAt: new Date(), progress: { phase: 'analyzing', percent: 20 } }).where(eq(agentRuns.id, run.id));
-      const input = await buildScheduledGovernanceInput(rules.rules);
+      const input = await buildScheduledGovernanceInput(rules.rules, run.id);
       const proposals = await generateGovernanceProposals(model, input);
       const persisted = await persistGovernancePlan(run.id, proposals);
-      const execution = persisted.changeSetId && persisted.automatic > 0 ? await executeGovernanceJob(persisted.changeSetId) : null;
+       const execution = persisted.automaticChangeSetId ? await executeGovernanceJob(persisted.automaticChangeSetId) : null;
+      await releaseScheduledGovernanceLease(run.id);
       return { runId: run.id, status: execution?.status ?? 'planned', persisted, execution };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await db.update(agentRuns).set({ status: 'failed', errorCode: 'GOVERNANCE_PLAN_FAILED', errorMessage: message, finishedAt: new Date(), progress: { phase: 'failed', percent: 100 } }).where(eq(agentRuns.id, run.id));
+      await releaseScheduledGovernanceLease(run.id);
       throw error;
     }
   }
@@ -81,7 +83,7 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
         const targetId = (record.input as { targetId?: unknown }).targetId;
         if (typeof targetId !== 'string') throw new Error('Governance plan job is missing targetId');
         const persisted = await persistGovernancePlan(targetId, proposals);
-        const execution = persisted.changeSetId && persisted.automatic > 0 ? await executeGovernanceJob(persisted.changeSetId) : null;
+        const execution = persisted.automaticChangeSetId ? await executeGovernanceJob(persisted.automaticChangeSetId) : null;
         output = { proposals, persisted, execution };
       } else if (jobType === 'image_generate') {
         output = await generateImage(primary, record.input as Record<string, unknown>);

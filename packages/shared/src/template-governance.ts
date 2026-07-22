@@ -44,6 +44,9 @@ export const governanceChangeSetStatusSchema = z.enum([
 ]);
 export type GovernanceChangeSetStatus = z.infer<typeof governanceChangeSetStatusSchema>;
 
+export const governanceExecutionModeSchema = z.enum(['automatic', 'approval']);
+export type GovernanceExecutionMode = z.infer<typeof governanceExecutionModeSchema>;
+
 export const governanceProposalStatusSchema = z.enum([
   'planned',
   'accepted',
@@ -54,6 +57,7 @@ export const governanceProposalStatusSchema = z.enum([
   'applied',
   'conflict',
   'failed',
+  'rejected',
   'rolled_back',
 ]);
 export type GovernanceProposalStatus = z.infer<typeof governanceProposalStatusSchema>;
@@ -228,11 +232,13 @@ const governanceVariableSnapshotSchema = z.object({
 }).passthrough();
 
 export const templateVersionSnapshotSchema = z.object({
+  snapshotSchemaVersion: z.number().int().min(1).default(1),
   templateId: z.string().trim().min(1).max(120),
   version: z.number().int().min(1),
   name: z.string().trim().min(1).max(300),
   summary: z.string().max(2_000),
   description: z.string().max(20_000),
+  category: z.string().trim().min(1).max(80).optional(),
   semantic: governanceSemanticSchema,
   variables: z.array(governanceVariableSnapshotSchema).max(12),
   promptTemplate: z.string().min(1).max(50_000),
@@ -240,10 +246,25 @@ export const templateVersionSnapshotSchema = z.object({
   coverObjectKey: z.string().max(1_000).nullable().default(null),
   coverUrl: z.string().max(4_000).nullable().default(null),
   status: z.enum(['draft', 'published', 'archived']),
+  publishedAt: z.string().datetime().nullable().default(null),
   source: z.enum(['manual', 'image_reverse', 'text_expand']),
+  sourceMeta: z.record(z.unknown()).nullable().default(null),
+  modelHints: z.record(z.unknown()).nullable().default(null),
+  i18n: z.record(z.unknown()).nullable().default(null),
   isFeatured: z.boolean(),
   featuredOrder: z.number().int().min(0).max(1_000_000),
+  isHot: z.boolean().default(false),
   locale: z.string().trim().min(1).max(20),
+  taxonomyAssignments: z.array(z.object({
+    termId: z.string().uuid(),
+    slug: z.string().trim().min(1).max(80),
+    dimension: z.enum(['output_type', 'scenario', 'style', 'subject']),
+    source: z.enum(['ai', 'admin', 'migration']).default('migration'),
+    confidence: z.number().min(0).max(1).nullable().default(null),
+  })).max(100).default([]),
+  taxonomyReviewedAt: z.string().datetime().nullable().default(null),
+  taxonomyReviewedBy: z.string().uuid().nullable().default(null),
+  taxonomyReviewStatus: z.enum(['pending', 'needs_attention', 'reviewed']).default('pending'),
 });
 export type TemplateVersionSnapshot = z.infer<typeof templateVersionSnapshotSchema>;
 
@@ -292,13 +313,55 @@ export type GovernanceQueueSummary = z.infer<typeof governanceQueueSummarySchema
 
 export const governanceChangeSetSummarySchema = z.object({
   total: z.number().int().nonnegative(),
-  automatic: z.number().int().nonnegative(),
-  awaitingApproval: z.number().int().nonnegative(),
-  conflicts: z.number().int().nonnegative(),
-  skipped: z.number().int().nonnegative(),
-  failed: z.number().int().nonnegative(),
+  automatic: z.number().int().nonnegative().default(0),
+  awaitingApproval: z.number().int().nonnegative().default(0),
+  approved: z.number().int().nonnegative().default(0),
+  applied: z.number().int().nonnegative().default(0),
+  rejected: z.number().int().nonnegative().default(0),
+  conflicts: z.number().int().nonnegative().default(0),
+  skipped: z.number().int().nonnegative().default(0),
+  failed: z.number().int().nonnegative().default(0),
+  rolledBack: z.number().int().nonnegative().default(0),
+  deleted: z.number().int().nonnegative().default(0),
 });
 export type GovernanceChangeSetSummary = z.infer<typeof governanceChangeSetSummarySchema>;
+
+export const governanceRunStatsSchema = governanceChangeSetSummarySchema.extend({
+  changeSets: z.number().int().nonnegative().default(0),
+});
+export type GovernanceRunStats = z.infer<typeof governanceRunStatsSchema>;
+
+export function deriveGovernanceRunState(input: {
+  changeSets: Array<{ id: string; executionMode: string; status: string }>;
+  items: Array<{ changeSetId: string; status: string; errorCode?: string | null }>;
+}): { status: GovernanceRunStatus; stats: GovernanceRunStats; terminal: boolean } {
+  const automaticSetIds = new Set(input.changeSets.filter((set) => set.executionMode === 'automatic').map((set) => set.id));
+  const count = (status: string) => input.items.filter((item) => item.status === status).length;
+  const stats = governanceRunStatsSchema.parse({
+    total: input.items.length,
+    automatic: input.items.filter((item) => automaticSetIds.has(item.changeSetId)).length,
+    awaitingApproval: count('awaiting_approval'),
+    approved: input.changeSets.filter((set) => set.executionMode === 'approval' && set.status === 'approved').length,
+    applied: count('applied'),
+    rejected: count('rejected'),
+    conflicts: count('conflict'),
+    skipped: count('skipped'),
+    failed: count('failed'),
+    rolledBack: count('rolled_back'),
+    deleted: input.items.filter((item) => item.status === 'applied' && item.errorCode === 'DELETED').length,
+    changeSets: input.changeSets.length,
+  });
+  const hasRunning = input.items.some((item) => item.status === 'running') || input.changeSets.some((set) => set.status === 'auto_executing');
+  const hasPendingExecution = input.items.some((item) => ['pending', 'queued'].includes(item.status));
+  let status: GovernanceRunStatus;
+  if (hasRunning) status = 'auto_executing';
+  else if (hasPendingExecution) status = 'planned';
+  else if (stats.awaitingApproval > 0) status = 'awaiting_approval';
+  else if (stats.failed > 0 || stats.conflicts > 0) status = stats.applied > 0 || stats.rolledBack > 0 ? 'partially_succeeded' : 'failed';
+  else if (stats.rejected > 0) status = stats.applied > 0 || stats.rolledBack > 0 ? 'partially_succeeded' : 'cancelled';
+  else status = 'succeeded';
+  return { status, stats, terminal: ['partially_succeeded', 'succeeded', 'failed', 'cancelled'].includes(status) };
+}
 
 export const governanceRiskInputSchema = z.object({
   action: governanceActionSchema,

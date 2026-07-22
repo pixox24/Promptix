@@ -43,6 +43,7 @@ export type GovernanceProposalDetail = {
 export type GovernanceChangeSetSummary = {
   id: string;
   runId: string;
+  executionMode: 'automatic' | 'approval' | 'legacy_mixed';
   status: GovernanceChangeSetStatus;
   summary: Record<string, number>;
   rollbackUntil: string | null;

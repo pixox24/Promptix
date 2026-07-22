@@ -1,4 +1,4 @@
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import {
   governanceRuleSetSchema,
   governanceSelectionScopeSchema,
@@ -14,6 +14,7 @@ import {
   providers,
   promptTemplates,
   taxonomyTerms,
+  templateTaxonomyAssignments,
   templateVersions,
 } from '../db/schema.js';
 import { search_templates } from './governance-tools.js';
@@ -39,16 +40,22 @@ export async function prepareGovernanceRun(runId: string) {
   const rulesResult = governanceRuleSetSchema.safeParse(ruleSet?.rules);
   if (!ruleSet || !rulesResult.success) throw new GovernancePreparationError('RULE_SET_INVALID', '治理规则缺失或格式无效');
 
-  const models = await db.select({ model: providerModels, provider: providers }).from(providerModels)
+  const modelQuery = db.select({ model: providerModels, provider: providers }).from(providerModels)
     .innerJoin(providers, eq(providerModels.providerId, providers.id))
-    .where(eq(providerModels.isDefaultText, true)).limit(20);
+    .where(rulesResult.data.agent.modelId
+      ? eq(providerModels.id, rulesResult.data.agent.modelId)
+      : eq(providerModels.isDefaultText, true))
+    .limit(20);
+  const models = await modelQuery;
   const selected = rulesResult.data.agent.modelId
     ? models.find(({ model }) => model.id === rulesResult.data.agent.modelId)
     : models.find(({ model, provider }) => model.enabled && provider.enabled
     && modelCapabilitySchema.array().safeParse(model.capabilities).success
+    && modelCapabilitySchema.array().parse(model.capabilities).includes('text')
     && modelCapabilitySchema.array().parse(model.capabilities).includes('structured_output'));
   if (!selected || !selected.model.enabled || !selected.provider.enabled
     || !modelCapabilitySchema.array().safeParse(selected.model.capabilities).success
+    || !modelCapabilitySchema.array().parse(selected.model.capabilities).includes('text')
     || !modelCapabilitySchema.array().parse(selected.model.capabilities).includes('structured_output')) {
     throw new GovernancePreparationError('MODEL_NOT_CONFIGURED', '未配置已启用且支持结构化输出的 Agent 文本模型');
   }
@@ -67,7 +74,13 @@ export async function prepareGovernanceRun(runId: string) {
     ? await db.select().from(templateVersions).where(inArray(templateVersions.templateId, templateIds))
     : [];
   const templates = templateIds.length
-    ? await db.select({ id: promptTemplates.id, currentVersion: promptTemplates.currentVersion }).from(promptTemplates).where(inArray(promptTemplates.id, templateIds))
+    ? await db.select({ id: promptTemplates.id, currentVersion: promptTemplates.currentVersion, taxonomyReviewedAt: promptTemplates.taxonomyReviewedAt, taxonomyReviewedBy: promptTemplates.taxonomyReviewedBy, taxonomyReviewStatus: promptTemplates.taxonomyReviewStatus }).from(promptTemplates).where(and(inArray(promptTemplates.id, templateIds), isNull(promptTemplates.deletedAt)))
+    : [];
+  const assignmentRows = templateIds.length
+    ? await db.select({ templateId: templateTaxonomyAssignments.templateId, source: templateTaxonomyAssignments.source, confidence: templateTaxonomyAssignments.confidence, term: taxonomyTerms })
+      .from(templateTaxonomyAssignments)
+      .innerJoin(taxonomyTerms, eq(templateTaxonomyAssignments.termId, taxonomyTerms.id))
+      .where(inArray(templateTaxonomyAssignments.templateId, templateIds))
     : [];
   const snapshots = templateIds.map((templateId) => {
     const current = versions.filter((row) => row.templateId === templateId).sort((a, b) => b.version - a.version)[0];
@@ -75,7 +88,20 @@ export async function prepareGovernanceRun(runId: string) {
     const template = templates.find((row) => row.id === templateId);
     if (!template) throw new GovernancePreparationError('SNAPSHOT_MISSING', `模板 ${templateId} 不存在或已被删除`);
     if (current.version !== template.currentVersion) throw new GovernancePreparationError('SNAPSHOT_STALE', `模板 ${templateId} 的快照版本落后于当前版本`);
-    const parsed = templateVersionSnapshotSchema.safeParse(current.snapshot);
+    const parsed = templateVersionSnapshotSchema.safeParse({
+      ...(current.snapshot as object),
+      snapshotSchemaVersion: 2,
+      taxonomyAssignments: assignmentRows.filter((row) => row.templateId === templateId).map((row) => ({
+        termId: row.term.id,
+        slug: row.term.slug,
+        dimension: row.term.dimension,
+        source: row.source,
+        confidence: row.confidence == null ? null : Number(row.confidence),
+      })),
+      taxonomyReviewedAt: template.taxonomyReviewedAt?.toISOString() ?? null,
+      taxonomyReviewedBy: template.taxonomyReviewedBy,
+      taxonomyReviewStatus: template.taxonomyReviewStatus,
+    });
     if (!parsed.success) throw new GovernancePreparationError('SNAPSHOT_INVALID', `模板 ${templateId} 的版本快照格式无效`);
     return parsed.data;
   });

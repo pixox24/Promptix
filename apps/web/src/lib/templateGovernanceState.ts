@@ -20,6 +20,10 @@ export function serializeGovernanceUrl(state: ReturnType<typeof parseGovernanceU
 
 export function changeGovernanceQuery(state: ReturnType<typeof parseGovernanceUrl>, patch: Partial<GovernanceTemplateQuery>) { return { query: { ...state.query, ...patch }, selectedId: null, cursor: null }; }
 export function toggleExplicitSelection(selection: GovernanceSelection, id: string): GovernanceSelection {
+  if (selection.mode === 'query') {
+    const exclusions = selection.exclusions.includes(id) ? selection.exclusions.filter((value) => value !== id) : [...selection.exclusions, id];
+    return { ...selection, exclusions };
+  }
   const ids = selection.mode === 'explicit' ? selection.templateIds : [];
   return { mode: 'explicit', templateIds: ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id], proposalIds: [] };
 }

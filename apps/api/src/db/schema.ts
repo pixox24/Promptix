@@ -85,6 +85,9 @@ export const promptTemplates = pgTable(
     locale: text('locale').notNull().default('zh'),
     i18n: jsonb('i18n'),
     publishedAt: timestamp('published_at', { withTimezone: true }),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    deletedBy: uuid('deleted_by').references(() => adminUsers.id),
+    deletionReason: text('deletion_reason'),
     currentVersion: integer('current_version').notNull().default(1),
     createdBy: uuid('created_by').references(() => adminUsers.id),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -117,6 +120,15 @@ export const promptTemplates = pgTable(
     check('prompt_templates_taxonomy_review_status_check', sql`${t.taxonomyReviewStatus} in ('pending','needs_attention','reviewed')`),
   ],
 );
+
+export const templateGovernanceState = pgTable('template_governance_state', {
+  templateId: text('template_id').primaryKey().references(() => promptTemplates.id, { onDelete: 'cascade' }),
+  lastScanAt: timestamp('last_scan_at', { withTimezone: true }),
+  leaseUntil: timestamp('lease_until', { withTimezone: true }),
+  leaseToken: text('lease_token'),
+  lastRunId: uuid('last_run_id'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('template_governance_state_eligibility_idx').on(t.leaseUntil, t.lastScanAt)]);
 
 export const templateTaxonomyAssignments = pgTable(
   'template_taxonomy_assignments',
@@ -294,6 +306,7 @@ export const governanceChangeSets = pgTable(
     ruleSetId: uuid('rule_set_id').notNull().references(() => governanceRuleSets.id),
     ruleSetVersion: integer('rule_set_version').notNull(),
     idempotencyKey: text('idempotency_key').notNull(),
+    executionMode: text('execution_mode').notNull().default('automatic'),
     status: text('status').notNull().default('planned'),
     summary: jsonb('summary').notNull().default({}),
     rollbackUntil: timestamp('rollback_until', { withTimezone: true }),
@@ -305,6 +318,7 @@ export const governanceChangeSets = pgTable(
     uniqueIndex('governance_change_sets_idempotency_key_uidx').on(t.idempotencyKey),
     index('governance_change_sets_run_status_idx').on(t.runId, t.status),
     check('governance_change_sets_status_check', sql`${t.status} in ('planned','auto_executing','awaiting_approval','approved','rejected','partially_succeeded','succeeded','failed','cancelled','rollback_available','rolled_back')`),
+    check('governance_change_sets_execution_mode_check', sql`${t.executionMode} in ('automatic','approval','legacy_mixed')`),
   ],
 );
 
@@ -376,8 +390,9 @@ export const governanceChangeSetItems = pgTable(
   },
   (t) => [
     uniqueIndex('governance_change_set_items_change_set_proposal_uidx').on(t.changeSetId, t.proposalId),
+    uniqueIndex('governance_change_set_items_proposal_uidx').on(t.proposalId),
     index('governance_change_set_items_change_set_status_idx').on(t.changeSetId, t.status),
-    check('governance_change_set_items_status_check', sql`${t.status} in ('pending','awaiting_approval','queued','running','applied','skipped','conflict','failed','rolled_back')`),
+    check('governance_change_set_items_status_check', sql`${t.status} in ('pending','awaiting_approval','queued','running','applied','skipped','conflict','failed','rejected','rolled_back')`),
   ],
 );
 
@@ -398,6 +413,13 @@ export const governanceApprovals = pgTable(
     check('governance_approvals_decision_check', sql`${t.decision} in ('approved','rejected')`),
   ],
 );
+
+export const governanceOperationIdempotency = pgTable('governance_operation_idempotency', {
+  operationKey: text('operation_key').primaryKey(),
+  operation: text('operation').notNull(),
+  response: jsonb('response'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const governanceAuditEvents = pgTable(
   'governance_audit_events',

@@ -12,20 +12,23 @@ import { GovernanceRunStatusBar } from '../../components/admin/governance/Govern
 import { GovernanceStatePanel } from '../../components/admin/governance/GovernanceStatePanel';
 import { GovernanceTemplateTable } from '../../components/admin/governance/GovernanceTemplateTable';
 import { GovernanceToolbar } from '../../components/admin/governance/GovernanceToolbar';
-import { createGovernanceRun, fetchGovernanceRun, fetchGovernanceRunStats } from '../../data/templateGovernanceApi';
+import { createGovernanceRun, fetchGovernanceRun, fetchGovernanceRunStats, previewTemplateDeletion, requestTemplateDeletion } from '../../data/templateGovernanceApi';
 import { useGovernanceRuns } from '../../hooks/useGovernanceRuns';
 import { useTemplateGovernance } from '../../hooks/useTemplateGovernance';
 import { useToast } from '../../context/ToastContext';
+import { useConfirmDialog } from '../../context/ConfirmDialogContext';
 
 export function TemplateGovernancePage({ canManage = false }: { canManage?: boolean }) {
   const [showRules, setShowRules] = useState(false);
   const [showRuns, setShowRuns] = useState(false);
   const [focusRequest, setFocusRequest] = useState(0);
+  const [deletionBusy, setDeletionBusy] = useState(false);
   const controller = useTemplateGovernance();
   const runs = useGovernanceRuns(controller.refresh);
   const [stats, setStats] = useState<Awaited<ReturnType<typeof fetchGovernanceRunStats>> | null>(null);
   useEffect(() => { const abort = new AbortController(); fetchGovernanceRunStats(abort.signal).then(setStats).catch(() => undefined); return () => abort.abort(); }, [runs.runs.length]);
   const { toast } = useToast();
+  const confirm = useConfirmDialog();
   const items = controller.page?.items ?? [];
   const total = controller.page?.total ?? 0;
   const selectionLabel = controller.selection.mode === 'query'
@@ -35,15 +38,43 @@ export function TemplateGovernancePage({ canManage = false }: { canManage?: bool
   const submit = async (goal: string) => {
     const created = await createGovernanceRun({
       goal,
-      scope: controller.selection.mode === 'explicit' && controller.selection.templateIds.length
+      scope: controller.selection.mode === 'query'
         ? controller.selection
-        : { mode: 'query', query: controller.state.query, exclusions: [], snapshotAt: new Date().toISOString() },
+        : controller.selection.templateIds.length
+          ? controller.selection
+          : { mode: 'query', query: controller.state.query, exclusions: [], snapshotAt: new Date().toISOString() },
       idempotencyKey: crypto.randomUUID(),
     });
     const run = await fetchGovernanceRun(created.id);
     runs.trackRun(run); setShowRuns(true);
     toast(`治理运行 ${created.id.slice(0, 8)} 已创建`, 'success');
     return run;
+  };
+
+  const requestDeletion = async (templateIds: string[]) => {
+    if (!templateIds.length || deletionBusy) return;
+    setDeletionBusy(true);
+    try {
+      const preview = await previewTemplateDeletion(templateIds);
+      const visibleNames = preview.templates.slice(0, 8).map((template) => `- ${template.name}`).join('\n');
+      const remaining = preview.total > 8 ? `\n另有 ${preview.total - 8} 个模板` : '';
+      const approved = await confirm({
+        title: preview.total === 1 ? '申请删除这个模板？' : `申请删除 ${preview.total} 个模板？`,
+        description: `系统将创建一个独立的删除审批批次，批准后模板会从产品和管理列表中移除，版本与审计记录继续保留。\n\n${visibleNames}${remaining}`,
+        confirmLabel: '提交删除审批',
+        danger: true,
+      });
+      if (!approved) return;
+      const result = await requestTemplateDeletion(templateIds);
+      controller.setSelection({ mode: 'explicit', templateIds: [], proposalIds: [] });
+      controller.refresh();
+      void runs.refresh();
+      toast(`删除审批 ${result.changeSetId.slice(0, 8)} 已创建`, 'success');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '删除申请提交失败', 'error');
+    } finally {
+      setDeletionBusy(false);
+    }
   };
 
   return <div className="relative flex min-h-[720px] flex-1 flex-col overflow-hidden bg-slate-100">
@@ -65,9 +96,9 @@ export function TemplateGovernancePage({ canManage = false }: { canManage?: bool
           ? <GovernanceTemplateTable items={items} selection={controller.selection} selectedId={controller.state.selectedId} onToggle={controller.toggleSelection} onTogglePage={controller.togglePage} onInspect={controller.select}/>
           : <GovernanceStatePanel status={controller.status} error={controller.error} onRetry={controller.refresh}/>}</div>
         <GovernancePagination hasCursor={Boolean(controller.state.cursor)} hasMore={Boolean(controller.page?.nextCursor)} onFirst={controller.firstPage} onNext={controller.nextPage}/>
-        <GovernanceBulkBar selection={controller.selection} pageCount={items.length} total={total} onSelectAll={controller.selectAll} onGenerate={() => setFocusRequest((value) => value + 1)} onClear={() => controller.setSelection({ mode: 'explicit', templateIds: [], proposalIds: [] })}/>
+        <GovernanceBulkBar selection={controller.selection} pageCount={items.length} total={total} canManage={canManage} busy={deletionBusy} onSelectAll={controller.selectAll} onGenerate={() => setFocusRequest((value) => value + 1)} onDelete={() => { if (controller.selection.mode === 'explicit') void requestDeletion(controller.selection.templateIds); }} onClear={() => controller.setSelection({ mode: 'explicit', templateIds: [], proposalIds: [] })}/>
       </main>
-      <GovernanceInspector detail={controller.detail} canManage={canManage}/>
+      <GovernanceInspector detail={controller.detail} canManage={canManage} deletionBusy={deletionBusy} onRequestDelete={(id) => void requestDeletion([id])}/>
     </div>
     {showRules && <GovernanceRulePanel canManage={canManage} onClose={() => setShowRules(false)}/>}
     <GovernanceRunCenter open={showRuns} runs={runs.runs} stats={stats} detail={runs.detail} selectedId={runs.selectedId} loading={runs.loading} error={runs.error} onSelect={runs.selectRun} onRefresh={() => void runs.refresh()} onClose={() => setShowRuns(false)}/>

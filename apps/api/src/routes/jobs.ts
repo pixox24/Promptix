@@ -1,5 +1,5 @@
 import { Hono, type Context } from 'hono';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   jobTypeSchema,
@@ -178,7 +178,7 @@ jobRoutes.post('/',async(c)=>{
   }
   let resolvedInput = parsed.data.input;
   if (parsed.data.type === 'image_generate' && parsed.data.templateId) {
-    const [template] = await getDb().select().from(promptTemplates).where(eq(promptTemplates.id, parsed.data.templateId)).limit(1);
+    const [template] = await getDb().select().from(promptTemplates).where(and(eq(promptTemplates.id, parsed.data.templateId), isNull(promptTemplates.deletedAt))).limit(1);
     if (!template) return fail(c, 'NOT_FOUND', 'Template not found', 404);
     try {
       const request = buildTemplateCoverRequest(template, 'template_revision_cover');
@@ -305,7 +305,7 @@ jobRoutes.post('/:id/set-cover',async(c)=>{
   const body=await c.req.json().catch(()=>({})); const templateId=typeof body.templateId==='string'?body.templateId:''; const imageIndex=Number(body.imageIndex??0);
   const db=getDb(); const [[job],[template]]=await Promise.all([
     db.select().from(generationJobs).where(and(eq(generationJobs.id,c.req.param('id')),eq(generationJobs.status,'succeeded'))).limit(1),
-    db.select().from(promptTemplates).where(eq(promptTemplates.id,templateId)).limit(1),
+    db.select().from(promptTemplates).where(and(eq(promptTemplates.id,templateId), isNull(promptTemplates.deletedAt))).limit(1),
   ]);
   if(!job)return fail(c,'JOB_NOT_READY','Generation job is not ready',409); if(!template)return fail(c,'NOT_FOUND','Template not found',404);
   const images=(job.output as {images?:Array<{url?:string;b64_json?:string}>}|null)?.images??[]; const image=images[imageIndex];

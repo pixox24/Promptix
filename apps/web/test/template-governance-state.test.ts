@@ -16,5 +16,9 @@ test('query changes reset cursor/detail and selection supports explicit or all m
   let selection = toggleExplicitSelection({ mode: 'explicit', templateIds: [], proposalIds: [] }, 'a'); selection = toggleExplicitSelection(selection, 'b'); selection = toggleExplicitSelection(selection, 'a');
   assert.deepEqual(selection.templateIds, ['b']);
   const all = selectAllMatching(state.query, '2026-07-21T00:00:00.000Z'); assert.equal(all.mode, 'query'); assert.deepEqual(all.exclusions, []);
+  const excluded = toggleExplicitSelection(all, 'a');
+  assert.equal(excluded.mode, 'query');
+  assert.deepEqual(excluded.exclusions, ['a']);
+  assert.deepEqual(toggleExplicitSelection(excluded, 'a').exclusions, []);
   assert.equal(selectionCountCopy(all, 20, 125), '已选择全部 125 条匹配结果'); assert.equal(GOVERNANCE_QUEUE_LABELS.pending_approval, '等待审批');
 });

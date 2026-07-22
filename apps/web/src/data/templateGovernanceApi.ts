@@ -8,6 +8,8 @@ export type GovernanceAgentModel = { id: string; name: string; modelId: string; 
 export const fetchGovernanceQueues = (signal?: AbortSignal) => api<GovernanceQueueCount[]>('/api/admin/governance/queues', { signal });
 export const fetchGovernanceTemplates = (params: URLSearchParams, signal?: AbortSignal) => api<GovernanceTemplatePage>(`/api/admin/governance/templates?${params}`, { signal });
 export const fetchGovernanceTemplate = (id: string, signal?: AbortSignal) => api<GovernanceTemplateDetail>(`/api/admin/governance/templates/${encodeURIComponent(id)}`, { signal });
+export const previewTemplateDeletion = (templateIds: string[]) => api<{ templates: Array<{ id: string; name: string; status: string }>; total: number }>('/api/admin/templates/deletion-requests/preview', { method: 'POST', body: JSON.stringify({ templateIds }) });
+export const requestTemplateDeletion = (templateIds: string[]) => api<{ changeSetId: string; status: 'awaiting_approval' }>('/api/admin/templates/deletion-requests', { method: 'POST', body: JSON.stringify({ templateIds, idempotencyKey: crypto.randomUUID() }) });
 export const createGovernanceRun = (input: unknown) => api<{ id: string; status: string }>('/api/admin/governance/runs', { method: 'POST', body: JSON.stringify(input) });
 export const fetchGovernanceRuns = (signal?: AbortSignal) => api<{ items: GovernanceRunSummary[] }>('/api/admin/governance/runs?limit=50', { signal });
 export const fetchGovernanceRunStats = (signal?: AbortSignal) => api<GovernanceRunStats>('/api/admin/governance/runs/stats', { signal });

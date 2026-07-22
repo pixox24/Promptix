@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { taxonomyDimensionSchema, taxonomySlugSchema } from '@promptix/shared';
 import { requireAdmin, type AdminVars } from '../lib/auth.js';
@@ -33,9 +33,10 @@ async function withReferenceCounts(rows: Array<typeof taxonomyTerms.$inferSelect
   return Promise.all(rows.map(async (row) => {
     const [[assignmentCount], [outputCount]] = await Promise.all([
       db.select({ value: sql<number>`count(*)::int` }).from(templateTaxonomyAssignments)
-        .where(eq(templateTaxonomyAssignments.termId, row.id)),
+        .innerJoin(promptTemplates, eq(templateTaxonomyAssignments.templateId, promptTemplates.id))
+        .where(and(eq(templateTaxonomyAssignments.termId, row.id), isNull(promptTemplates.deletedAt))),
       db.select({ value: sql<number>`count(*)::int` }).from(promptTemplates)
-        .where(eq(promptTemplates.outputTypeId, row.id)),
+        .where(and(eq(promptTemplates.outputTypeId, row.id), isNull(promptTemplates.deletedAt))),
     ]);
     return { ...row, referenceCount: Number(assignmentCount?.value ?? 0) + Number(outputCount?.value ?? 0) };
   }));

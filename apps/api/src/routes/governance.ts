@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import { governanceRuleSetSchema, governanceSelectionScopeSchema, modelCapabilitySchema, type GovernanceQueueId } from '@promptix/shared';
+import { governanceChangeSetSummarySchema, governanceRuleSetSchema, governanceSelectionScopeSchema, modelCapabilitySchema, type GovernanceQueueId } from '@promptix/shared';
 import { z } from 'zod';
 import { getDb } from '../db/client.js';
 import { agentRuns, generationJobs, governanceApprovals, governanceAuditEvents, governanceChangeSetItems, governanceChangeSets, governanceProposals, governanceRuleSets, providerModels, providers } from '../db/schema.js';
@@ -159,8 +159,13 @@ governanceRoutes.post('/change-sets', async (c) => {
   if (!run) return fail(c, 'NOT_FOUND', 'Agent run not found', 404);
   const proposals = await getDb().select().from(governanceProposals).where(inArray(governanceProposals.id, parsed.data.proposalIds));
   if (proposals.length !== parsed.data.proposalIds.length || proposals.some((proposal) => proposal.runId !== run.id)) return fail(c, 'INVALID_PROPOSAL_SCOPE', 'Proposals must belong to the run', 409);
+  const requiresApproval = new Set(proposals.map((proposal) => proposal.requiresApproval));
+  if (requiresApproval.size > 1) return fail(c, 'MIXED_CHANGE_SET_NOT_ALLOWED', 'Automatic and approval proposals must use separate change sets', 409);
+  const existingItems = await getDb().select({ proposalId: governanceChangeSetItems.proposalId }).from(governanceChangeSetItems).where(inArray(governanceChangeSetItems.proposalId, parsed.data.proposalIds));
+  if (existingItems.length) return fail(c, 'PROPOSAL_ALREADY_ASSIGNED', 'A proposal can belong to only one change set', 409);
+  const executionMode = proposals[0]!.requiresApproval ? 'approval' : 'automatic';
   const result = await getDb().transaction(async (tx) => {
-    const [changeSet] = await tx.insert(governanceChangeSets).values({ runId: run.id, scopeSnapshot: { mode: 'explicit', templateIds: proposals.map((proposal) => proposal.templateId), proposalIds: proposals.map((proposal) => proposal.id) }, ruleSetId: run.ruleSetId, ruleSetVersion: run.ruleSetVersion, idempotencyKey: parsed.data.idempotencyKey, status: proposals.some((proposal) => proposal.requiresApproval) ? 'awaiting_approval' : 'planned', summary: { total: proposals.length } }).returning();
+    const [changeSet] = await tx.insert(governanceChangeSets).values({ runId: run.id, scopeSnapshot: { mode: 'explicit', templateIds: proposals.map((proposal) => proposal.templateId), proposalIds: proposals.map((proposal) => proposal.id) }, ruleSetId: run.ruleSetId, ruleSetVersion: run.ruleSetVersion, idempotencyKey: parsed.data.idempotencyKey, executionMode, status: executionMode === 'approval' ? 'awaiting_approval' : 'planned', summary: governanceChangeSetSummarySchema.parse({ total: proposals.length, automatic: executionMode === 'automatic' ? proposals.length : 0, awaitingApproval: executionMode === 'approval' ? proposals.length : 0 }) }).returning();
     await tx.insert(governanceChangeSetItems).values(proposals.map((proposal) => ({ changeSetId: changeSet.id, proposalId: proposal.id, templateId: proposal.templateId, status: proposal.requiresApproval ? 'awaiting_approval' : 'pending' })));
     await tx.insert(governanceAuditEvents).values({ actorType: 'admin', actorId: c.get('admin').sub, eventType: 'governance.change_set_created', targetType: 'change_set', targetId: changeSet.id, runId: run.id, changeSetId: changeSet.id, payload: { proposalIds: proposals.map((proposal) => proposal.id), idempotencyKey: parsed.data.idempotencyKey } });
     return changeSet;
