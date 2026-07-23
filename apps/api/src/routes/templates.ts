@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { and, asc, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { classifyGovernanceRisk, governanceRuleSetSchema, modelCapabilitySchema, taxonomySlugSchema, templateDraftSchema, type SemanticClassification, type TemplateVersionSnapshot } from '@promptix/shared';
+import { classifyGovernanceRisk, governanceRuleSetSchema, modelCapabilitySchema, taxonomySlugSchema, templateDraftSchema, type TemplateVersionSnapshot } from '@promptix/shared';
 import { getDb } from '../db/client.js';
 import { agentRuns, generationJobs, governanceAuditEvents, governanceChangeSetItems, governanceChangeSets, governanceProposals, governanceRuleSets, mediaObjects, promptTemplates, providerModels, providers, taxonomyTerms, templateAssets, templateTaxonomyAssignments, templateVersions } from '../db/schema.js';
 import { requireAdmin, requireOwner, type AdminVars } from '../lib/auth.js';
@@ -9,8 +9,10 @@ import { deleteObject, putObject, storageKind } from '../lib/storage.js';
 import { fail, ok } from '../lib/response.js';
 import { enqueueGenerationJob } from '../lib/job-enqueue.js';
 import { buildTemplateCoverRequest } from '../lib/template-cover.js';
+import { loadTemplateSemanticViews, type TemplateSemanticView } from '../lib/template-semantics.js';
 import { assertConfirmableSemantic, legacyCategoryForOutputType, resolveSemanticTerms, TaxonomyValidationError } from '../lib/taxonomy.js';
 import { buildTemplateVersionSnapshot, recordInitialTemplateVersion, updateTemplateWithVersion } from '../lib/template-versioning.js';
+import { getSimilarTemplateResponse } from '../services/similar-template-service.js';
 
 const templateInput = templateDraftSchema.extend({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,79}$/).optional(),
@@ -60,46 +62,6 @@ const deletionRequestInput = deletionSelectionInput.extend({
 function slug(value: string) {
   const normalized = value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   return `${normalized || 'template'}-${Date.now().toString(36)}`;
-}
-
-type TemplateSemanticView = SemanticClassification;
-
-async function semanticViews(rows: Array<typeof promptTemplates.$inferSelect>) {
-  if (!rows.length) return new Map<string, TemplateSemanticView>();
-  const templateIds = rows.map((row) => row.id);
-  const outputTypeIds = rows.map((row) => row.outputTypeId).filter((id): id is string => Boolean(id));
-  const [assignments, outputTerms] = await Promise.all([
-    getDb().select({ templateId: templateTaxonomyAssignments.templateId, term: taxonomyTerms })
-      .from(templateTaxonomyAssignments)
-      .innerJoin(taxonomyTerms, eq(templateTaxonomyAssignments.termId, taxonomyTerms.id))
-      .where(inArray(templateTaxonomyAssignments.templateId, templateIds)),
-    outputTypeIds.length
-      ? getDb().select().from(taxonomyTerms).where(inArray(taxonomyTerms.id, outputTypeIds))
-      : Promise.resolve([]),
-  ]);
-  const outputById = new Map(outputTerms.map((term) => [term.id, term.slug]));
-  const assignmentsByTemplate = new Map<string, Array<typeof taxonomyTerms.$inferSelect>>();
-  for (const assignment of assignments) {
-    const list = assignmentsByTemplate.get(assignment.templateId) ?? [];
-    list.push(assignment.term);
-    assignmentsByTemplate.set(assignment.templateId, list);
-  }
-  return new Map(rows.map((row) => {
-    const terms = assignmentsByTemplate.get(row.id) ?? [];
-    const meta = row.classificationMeta && typeof row.classificationMeta === 'object'
-      ? row.classificationMeta as { confidence?: SemanticClassification['confidence'] }
-      : undefined;
-    return [row.id, {
-      workflowType: row.workflowType as SemanticClassification['workflowType'],
-      outputType: row.outputTypeId ? outputById.get(row.outputTypeId) ?? null : null,
-      scenarios: terms.filter((term) => term.dimension === 'scenario').map((term) => term.slug),
-      styles: terms.filter((term) => term.dimension === 'style').map((term) => term.slug),
-      subjects: terms.filter((term) => term.dimension === 'subject').map((term) => term.slug),
-      tags: row.tags,
-      unmappedTerms: Array.isArray(row.unmappedTerms) ? row.unmappedTerms as SemanticClassification['unmappedTerms'] : [],
-      confidence: meta?.confidence ?? {},
-    } satisfies TemplateSemanticView];
-  }));
 }
 
 async function taxonomySnapshotViews(rows: Array<typeof promptTemplates.$inferSelect>) {
@@ -251,15 +213,26 @@ publicTemplateRoutes.get('/', async (c) => {
     db.select().from(promptTemplates).where(where).orderBy(...order)
       .limit(pageSize).offset((page - 1) * pageSize),
   ]);
-  const semantics = await semanticViews(rows);
+  const semantics = await loadTemplateSemanticViews(rows);
   return ok(c, { items: rows.map((row) => publicShape(row, semantics.get(row.id))), page, pageSize, total: Number(totalRow?.total ?? 0) });
+});
+
+publicTemplateRoutes.get('/:id/similar', async (c) => {
+  const limit = Number(c.req.query('limit') ?? 4);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 12) {
+    return fail(c, 'INVALID_LIMIT', 'limit must be an integer between 1 and 12', 400);
+  }
+  const result = await getSimilarTemplateResponse(c.req.param('id'), limit);
+  return result
+    ? ok(c, result)
+    : fail(c, 'NOT_FOUND', 'Template not found', 404);
 });
 
 publicTemplateRoutes.get('/:id', async (c) => {
   const [row] = await getDb().select().from(promptTemplates)
     .where(and(eq(promptTemplates.id, c.req.param('id')), eq(promptTemplates.status, 'published'), isNull(promptTemplates.deletedAt))).limit(1);
   if (!row) return fail(c, 'NOT_FOUND', 'Template not found', 404);
-  const semantics = await semanticViews([row]);
+  const semantics = await loadTemplateSemanticViews([row]);
   return ok(c, publicShape(row, semantics.get(row.id)));
 });
 
@@ -281,7 +254,7 @@ adminTemplateRoutes.get('/', async (c) => {
   if (q) filters.push(or(ilike(promptTemplates.name, `%${q}%`), ilike(promptTemplates.summary, `%${q}%`))!);
   const rows = await getDb().select().from(promptTemplates)
     .where(filters.length ? and(...filters) : undefined).orderBy(desc(promptTemplates.updatedAt));
-  const semantics = await semanticViews(rows);
+  const semantics = await loadTemplateSemanticViews(rows);
   return ok(c, rows.map((row) => ({ ...row, semantic: semantics.get(row.id) })));
 });
 
@@ -345,7 +318,7 @@ adminTemplateRoutes.post('/', async (c) => {
         try { await enqueueGenerationJob(created.id); } catch (error) { await getDb().update(generationJobs).set({ status: 'failed', errorMessage: error instanceof Error ? error.message : 'Queue unavailable', finishedAt: new Date() }).where(eq(generationJobs.id, created.id)); coverJob = { ...created, status: 'failed', errorMessage: error instanceof Error ? error.message : 'Queue unavailable' }; }
       }
     }
-    const semantics = await semanticViews([row]);
+    const semantics = await loadTemplateSemanticViews([row]);
     const shaped = { ...row, semantic: semantics.get(row.id) };
     return ok(c, coverJob ? { ...shaped, coverJob } : shaped, 201);
   } catch (e) {
@@ -358,7 +331,7 @@ adminTemplateRoutes.get('/:id', async (c) => {
   const [row] = await getDb().select().from(promptTemplates).where(and(eq(promptTemplates.id, c.req.param('id')), isNull(promptTemplates.deletedAt))).limit(1);
   if (!row) return fail(c, 'NOT_FOUND', 'Template not found', 404);
   const [coverJob] = await getDb().select().from(generationJobs).where(and(eq(generationJobs.templateId, row.id), eq(generationJobs.type, 'image_generate'))).orderBy(desc(generationJobs.createdAt)).limit(1);
-  const semantics = await semanticViews([row]);
+  const semantics = await loadTemplateSemanticViews([row]);
   const shaped = { ...row, semantic: semantics.get(row.id) };
   return ok(c, coverJob ? { ...shaped, coverJob } : shaped);
 });
@@ -376,7 +349,7 @@ adminTemplateRoutes.patch('/:id', async (c) => {
     }
     const existingRows = await getDb().select().from(promptTemplates).where(and(eq(promptTemplates.id, c.req.param('id')), isNull(promptTemplates.deletedAt))).limit(1);
     if (!existingRows[0]) return fail(c, 'NOT_FOUND', 'Template not found', 404);
-    const existingSemantics = await semanticViews(existingRows);
+    const existingSemantics = await loadTemplateSemanticViews(existingRows);
     const existingTaxonomy = await taxonomySnapshotViews(existingRows);
     const nextSemantic = resolved?.semantic ?? existingSemantics.get(c.req.param('id')) ?? null;
     const nextTaxonomy: TemplateVersionSnapshot['taxonomyAssignments'] = resolved
@@ -459,7 +432,7 @@ adminTemplateRoutes.patch('/:id', async (c) => {
         : fail(c, 'VERSION_CONFLICT', `Template changed on the server (version ${mutation.currentVersion ?? 'unknown'})`, 409);
     }
     const row = mutation.template;
-    const semantics = await semanticViews([row]);
+    const semantics = await loadTemplateSemanticViews([row]);
     return ok(c, { ...row, semantic: semantics.get(row.id) });
   } catch (error) {
     if (error instanceof TaxonomyValidationError) return fail(c, error.code, error.message, 400);
@@ -546,7 +519,7 @@ adminTemplateRoutes.post('/deletion-requests', requireOwner, async (c) => {
   const activeProposals = await getDb().select({ templateId: governanceProposals.templateId }).from(governanceProposals)
     .where(and(inArray(governanceProposals.templateId, parsed.data.templateIds), inArray(governanceProposals.status, ['planned', 'accepted', 'awaiting_approval', 'approved'])));
   if (activeProposals.length) return fail(c, 'ACTIVE_GOVERNANCE_WORK_EXISTS', '部分模板已有待处理的治理任务，请先处理现有任务', 409);
-  const semantics = await semanticViews(rows);
+  const semantics = await loadTemplateSemanticViews(rows);
   const byId = new Map(rows.map((row) => [row.id, row]));
   const result = await createLifecycleApprovalBatch({
     templates: parsed.data.templateIds.map((id) => ({ template: byId.get(id)!, semantic: semantics.get(id)! })),
@@ -562,7 +535,7 @@ adminTemplateRoutes.delete('/:id', async (c) => {
   if (!row) return fail(c, 'NOT_FOUND', 'Template not found', 404);
   const body = await c.req.json().catch(() => ({}));
   const idempotencyKey = typeof body.idempotencyKey === 'string' ? body.idempotencyKey : crypto.randomUUID();
-  const semantics = await semanticViews([row]);
+  const semantics = await loadTemplateSemanticViews([row]);
   return ok(c, await createLifecycleApproval({ template: row, action: 'delete', actorId: c.get('admin').sub, idempotencyKey, semantic: semantics.get(row.id)! }), 202);
 });
 
@@ -573,7 +546,7 @@ adminTemplateRoutes.post('/:id/publish', async (c) => {
   if (!existing) return fail(c, 'NOT_FOUND', 'Template not found', 404);
   if (!existing.coverObjectKey || !existing.coverUrl) return fail(c, 'COVER_REQUIRED', 'A cover image is required before publishing', 409);
   if (existing.taxonomyReviewStatus !== 'reviewed') return fail(c, 'TAXONOMY_REVIEW_REQUIRED', '请先人工确认模板分类', 409);
-  const semantics = await semanticViews([existing]);
+  const semantics = await loadTemplateSemanticViews([existing]);
   const semantic = semantics.get(existing.id);
   if (!semantic) return fail(c, 'TAXONOMY_REVIEW_REQUIRED', '模板分类不可用', 409);
   try { assertConfirmableSemantic(semantic); } catch (error) {
@@ -599,7 +572,7 @@ adminTemplateRoutes.post('/:id/archive', async (c) => {
   const [existing] = await getDb().select().from(promptTemplates).where(and(eq(promptTemplates.id, c.req.param('id')), isNull(promptTemplates.deletedAt))).limit(1);
   if (!existing) return fail(c, 'NOT_FOUND', 'Template not found', 404);
   if (existing.currentVersion !== action.data.expectedVersion) return fail(c, 'VERSION_CONFLICT', 'Template changed on the server', 409);
-  const semantics = await semanticViews([existing]);
+  const semantics = await loadTemplateSemanticViews([existing]);
   return ok(c, await createLifecycleApproval({ template: existing, action: 'archive', actorId: c.get('admin').sub, idempotencyKey: action.data.idempotencyKey, semantic: semantics.get(existing.id)! }), 202);
 });
 
@@ -629,7 +602,7 @@ adminTemplateRoutes.post('/:id/cover', async (c) => {
   const key = `public/templates/${template.id}/cover-${Date.now()}.${ext}`;
   const stored = await putObject(key, Buffer.from(await file.arrayBuffer()), file.type);
   const db = getDb();
-  const semantics = await semanticViews([template]);
+  const semantics = await loadTemplateSemanticViews([template]);
   const taxonomyAssignments = (await taxonomySnapshotViews([template])).get(template.id) ?? [];
   const row = await db.transaction(async (tx) => {
     const [updated] = await tx.update(promptTemplates).set({
