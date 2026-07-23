@@ -148,7 +148,7 @@ export function assertAutopublishGrant(
   if (grant.inputSnapshotHash && grant.inputSnapshotHash !== request.inputSnapshotHash) {
     throw new AutopublishCapabilityError('AUTOPUBLISH_GRANT_INPUT_MISMATCH');
   }
-  if (grant.initiatedBy && grant.initiatedBy !== request.requestedBy) {
+  if (request.requestedBy === undefined || grant.initiatedBy !== request.requestedBy) {
     throw new AutopublishCapabilityError('AUTOPUBLISH_GRANT_INITIATOR_MISMATCH');
   }
   if (grant.agentId !== request.agentId) {

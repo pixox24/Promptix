@@ -158,7 +158,10 @@ function minimumBudget(ruleBudget: AutopublishBudget, grantBudget: AutopublishBu
   ) as AutopublishBudget;
 }
 
-function normalizeInput(input: CreateAutopublishRunInput): AutopublishInputSnapshot {
+function normalizeInput(input: CreateAutopublishRunInput): {
+  inputSnapshot: AutopublishInputSnapshot;
+  idempotencyKey: string;
+} {
   const result = autopublishCreateInputSchema.safeParse({
     flowType: input.flowType,
     triggerType: input.triggerType,
@@ -173,17 +176,20 @@ function normalizeInput(input: CreateAutopublishRunInput): AutopublishInputSnaps
   if (!result.success) throw new AutopublishServiceError('AUTOPUBLISH_INPUT_INVALID');
   const parsed = result.data;
   return {
-    flowType: parsed.flowType,
-    triggerType: parsed.triggerType,
-    ...(parsed.text === undefined ? {} : { text: parsed.text }),
-    allowAutomaticRepair: parsed.allowAutomaticRepair,
-    sourceType: parsed.sourceType,
-    sourceItemId: parsed.sourceItemId,
-    ...(parsed.modelId === undefined ? {} : { modelId: parsed.modelId }),
-    ...(parsed.visionModelId === undefined ? {} : { visionModelId: parsed.visionModelId }),
-    requestedBy: input.requestedBy,
-    agentId: input.agentId,
-    capabilityGrantId: input.capabilityGrantId,
+    idempotencyKey: parsed.idempotencyKey,
+    inputSnapshot: {
+      flowType: parsed.flowType,
+      triggerType: parsed.triggerType,
+      ...(parsed.text === undefined ? {} : { text: parsed.text }),
+      allowAutomaticRepair: parsed.allowAutomaticRepair,
+      sourceType: parsed.sourceType,
+      sourceItemId: parsed.sourceItemId,
+      ...(parsed.modelId === undefined ? {} : { modelId: parsed.modelId }),
+      ...(parsed.visionModelId === undefined ? {} : { visionModelId: parsed.visionModelId }),
+      requestedBy: input.requestedBy,
+      agentId: input.agentId,
+      capabilityGrantId: input.capabilityGrantId,
+    },
   };
 }
 
@@ -203,10 +209,11 @@ export function createAutopublishService(
 ): AutopublishService {
   return {
     async create(input) {
-      const inputSnapshot = normalizeInput(input);
+      const normalized = normalizeInput(input);
+      const { inputSnapshot, idempotencyKey } = normalized;
       const inputSnapshotHash = dependencies.hash(inputSnapshot);
 
-      const replay = await repository.findByIdempotencyKey(input.idempotencyKey);
+      const replay = await repository.findByIdempotencyKey(idempotencyKey);
       if (replay) {
         if (replay.inputSnapshotHash !== inputSnapshotHash) {
           throw new AutopublishServiceError('AUTOPUBLISH_IDEMPOTENCY_MISMATCH');
@@ -222,7 +229,7 @@ export function createAutopublishService(
         const parsedRules = autopublishRulesSchema.safeParse(active.rules);
         if (!parsedRules.success) throw new AutopublishServiceError('AUTOPUBLISH_RULES_INVALID');
         const rules = parsedRules.data;
-        assertTriggerEnabled(rules, input.triggerType);
+        assertTriggerEnabled(rules, inputSnapshot.triggerType);
         const parsedGrantBudget = autopublishBudgetSchema.safeParse(grant.budget);
         if (!parsedGrantBudget.success) {
           throw new AutopublishServiceError('AUTOPUBLISH_GRANT_BUDGET_INVALID');
@@ -230,21 +237,21 @@ export function createAutopublishService(
         const budgetSnapshot = minimumBudget(rules.budgets, parsedGrantBudget.data);
 
         assertAutopublishGrant(grant, {
-          triggerType: input.triggerType,
+          triggerType: inputSnapshot.triggerType,
           scope: 'autopublish.run:create',
           inputSnapshotHash,
           now: dependencies.now(),
           requestedBy: input.requestedBy,
           agentId: input.agentId,
-          sourceType: input.sourceType,
-          sourceItemId: input.sourceItemId,
-          flowType: input.flowType,
+          sourceType: inputSnapshot.sourceType,
+          sourceItemId: inputSnapshot.sourceItemId,
+          flowType: inputSnapshot.flowType,
           budget: budgetSnapshot,
         });
 
         const [taxonomy, promptVersion] = await Promise.all([
           dependencies.loadTaxonomy(),
-          dependencies.loadPromptVersion(input.flowType),
+          dependencies.loadPromptVersion(inputSnapshot.flowType),
         ]);
         return await repository.createRun({
           actor: {
@@ -252,13 +259,13 @@ export function createAutopublishService(
             id: grant.agentId,
             capabilityGrantId: grant.id,
           },
-          triggerType: input.triggerType,
+          triggerType: inputSnapshot.triggerType,
           requestedBy: input.requestedBy,
           agentId: input.agentId,
           capabilityGrantId: input.capabilityGrantId,
-          flowType: input.flowType,
-          sourceType: input.sourceType,
-          sourceItemId: input.sourceItemId,
+          flowType: inputSnapshot.flowType,
+          sourceType: inputSnapshot.sourceType,
+          sourceItemId: inputSnapshot.sourceItemId,
           inputSnapshot,
           inputSnapshotHash,
           ruleSetId: active.id,
@@ -266,10 +273,10 @@ export function createAutopublishService(
           taxonomySnapshotHash: taxonomy.hash,
           promptVersion,
           budgetSnapshot,
-          idempotencyKey: input.idempotencyKey,
+          idempotencyKey,
         });
       } catch (error) {
-        const winner = await repository.findByIdempotencyKey(input.idempotencyKey);
+        const winner = await repository.findByIdempotencyKey(idempotencyKey);
         if (winner) {
           if (winner.inputSnapshotHash !== inputSnapshotHash) {
             throw new AutopublishServiceError('AUTOPUBLISH_IDEMPOTENCY_MISMATCH');

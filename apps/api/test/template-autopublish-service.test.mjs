@@ -496,3 +496,124 @@ test('retry-after-conflict resumes at the stage selected by persisted error code
   assert.equal(recoveryStageFor('VERSION_CONFLICT', 'retry_after_conflict'), 'validating');
   assert.equal(recoveryStageFor('RULE_CONFLICT', 'retry_after_conflict'), 'reviewing_quality');
 });
+
+test('scheduled grant initiator binding distinguishes null and exact admin identity', async () => {
+  const { assertAutopublishGrant } = await import(capabilityModuleUrl);
+  const otherAdmin = '00000000-0000-4000-8000-000000000009';
+  const request = {
+    triggerType: 'scheduled_agent',
+    scope: 'autopublish.run:create',
+    inputSnapshotHash: 'scheduled-hash',
+    requestedBy: null,
+    agentId: 'scanner',
+    sourceType: 'internal_queue',
+    sourceItemId: 'row-1',
+    flowType: 'text_expand',
+    budget: makeGrant().budget,
+    now: NOW,
+  };
+  const scheduled = makeGrant({
+    triggerType: 'scheduled_agent',
+    agentId: 'scanner',
+    initiatedBy: null,
+    inputSnapshotHash: null,
+    sourceConstraints: { sourceTypes: ['internal_queue'], flowTypes: ['text_expand'] },
+  });
+  assert.throws(
+    () => assertAutopublishGrant(scheduled, { ...request, requestedBy: IDS.admin }),
+    (error) => error?.code === 'AUTOPUBLISH_GRANT_INITIATOR_MISMATCH',
+  );
+  const { requestedBy: _omitted, ...missingRequester } = request;
+  assert.throws(
+    () => assertAutopublishGrant(scheduled, missingRequester),
+    (error) => error?.code === 'AUTOPUBLISH_GRANT_INITIATOR_MISMATCH',
+  );
+  const bound = { ...scheduled, initiatedBy: IDS.admin };
+  assert.doesNotThrow(() => assertAutopublishGrant(bound, { ...request, requestedBy: IDS.admin }));
+  assert.throws(
+    () => assertAutopublishGrant(bound, { ...request, requestedBy: otherAdmin }),
+    (error) => error?.code === 'AUTOPUBLISH_GRANT_INITIATOR_MISMATCH',
+  );
+});
+
+test('canonical idempotency and source values replay one frozen delegated run', async () => {
+  const { createAutopublishService } = await import(serviceModuleUrl);
+  const repository = fakeRepository();
+  const service = createAutopublishService(repository, dependencies());
+  const first = await service.create(delegatedInput({
+    text: '  Create a studio portrait prompt  ',
+    sourceType: '  admin_intake  ',
+    sourceItemId: '  request-1  ',
+    idempotencyKey: '  delegate-request-1  ',
+  }));
+  const replay = await service.create(delegatedInput());
+  assert.equal(replay.id, first.id);
+  assert.equal(repository.runs.length, 1);
+  assert.equal(repository.outbox.length, 1);
+  assert.equal(repository.runs[0].idempotencyKey, 'delegate-request-1');
+  assert.equal(repository.runs[0].sourceType, 'admin_intake');
+  assert.equal(repository.runs[0].sourceItemId, 'request-1');
+  assert.equal(repository.runs[0].inputSnapshot.text, 'Create a studio portrait prompt');
+  assert.equal(repository.runs[0].inputSnapshot.sourceType, repository.runs[0].sourceType);
+  assert.equal(repository.runs[0].inputSnapshot.sourceItemId, repository.runs[0].sourceItemId);
+});
+
+test('canonical scheduled source values cannot bypass source uniqueness', async () => {
+  const { createAutopublishService } = await import(serviceModuleUrl);
+  const scheduledGrant = makeGrant({
+    id: '00000000-0000-4000-8000-000000000004',
+    triggerType: 'scheduled_agent',
+    agentId: 'scanner',
+    initiatedBy: null,
+    inputSnapshotHash: null,
+    sourceConstraints: { sourceTypes: ['internal_queue'], flowTypes: ['text_expand'] },
+  });
+  const repository = fakeRepository([scheduledGrant]);
+  const service = createAutopublishService(repository, dependencies());
+  const input = delegatedInput({
+    triggerType: 'scheduled_agent',
+    requestedBy: null,
+    agentId: 'scanner',
+    capabilityGrantId: scheduledGrant.id,
+    sourceType: '  internal_queue  ',
+    sourceItemId: '  row-1  ',
+    idempotencyKey: '  scheduled-request-1  ',
+  });
+  const first = await service.create(input);
+  assert.equal(first.sourceType, 'internal_queue');
+  assert.equal(first.sourceItemId, 'row-1');
+  assert.equal(repository.runs[0].inputSnapshot.sourceType, first.sourceType);
+  await assert.rejects(
+    () => service.create({
+      ...input,
+      sourceType: 'internal_queue',
+      sourceItemId: 'row-1',
+      idempotencyKey: 'scheduled-request-2',
+    }),
+    /AUTOPUBLISH_SOURCE_ALREADY_EXISTS/,
+  );
+});
+
+test('canonical same key still rejects a mismatched canonical payload', async () => {
+  const { createAutopublishService } = await import(serviceModuleUrl);
+  const repository = fakeRepository();
+  let latestSnapshot;
+  repository.getGrant = async () => makeGrant({
+    inputSnapshotHash: `hash:${JSON.stringify(latestSnapshot)}`,
+  });
+  const service = createAutopublishService(repository, dependencies({
+    hash(value) {
+      latestSnapshot = value;
+      return `hash:${JSON.stringify(value)}`;
+    },
+  }));
+  await service.create(delegatedInput({ idempotencyKey: '  delegate-request-1  ' }));
+  await assert.rejects(
+    () => service.create(delegatedInput({
+      idempotencyKey: 'delegate-request-1',
+      text: 'A genuinely different canonical prompt',
+    })),
+    (error) => error?.code === 'AUTOPUBLISH_IDEMPOTENCY_MISMATCH',
+  );
+  assert.equal(repository.runs.length, 1);
+});
