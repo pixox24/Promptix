@@ -1,5 +1,6 @@
 import {
   boolean,
+  type AnyPgColumn,
   check,
   index,
   integer,
@@ -312,7 +313,7 @@ export const governanceChangeSets = pgTable(
     ruleSetId: uuid('rule_set_id').notNull().references(() => governanceRuleSets.id),
     ruleSetVersion: integer('rule_set_version').notNull(),
     idempotencyKey: text('idempotency_key').notNull(),
-    permitId: uuid('permit_id'),
+    permitId: uuid('permit_id').references((): AnyPgColumn => governanceExecutionPermits.id),
     executionMode: text('execution_mode').notNull().default('automatic'),
     status: text('status').notNull().default('planned'),
     summary: jsonb('summary').notNull().default({}),
@@ -475,7 +476,7 @@ export const generationJobs = pgTable(
     errorDetails: jsonb('error_details'),
     progress: jsonb('progress'),
     resultMeta: jsonb('result_meta'),
-    autopublishRunId: uuid('autopublish_run_id'),
+    autopublishRunId: uuid('autopublish_run_id').references((): AnyPgColumn => templateAutopublishRuns.id),
     autopublishStage: text('autopublish_stage'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()

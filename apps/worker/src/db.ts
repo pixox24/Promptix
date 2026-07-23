@@ -1,5 +1,5 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
-import { boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
+import { type AnyPgColumn, boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { required } from './env.js';
@@ -51,7 +51,7 @@ export const generationJobs = pgTable('generation_jobs', {
   errorDetails: jsonb('error_details'),
   progress: jsonb('progress'),
   resultMeta: jsonb('result_meta'),
-  autopublishRunId: uuid('autopublish_run_id'),
+  autopublishRunId: uuid('autopublish_run_id').references((): AnyPgColumn => templateAutopublishRuns.id),
   autopublishStage: text('autopublish_stage'),
   startedAt: timestamp('started_at', { withTimezone: true }),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
@@ -128,7 +128,7 @@ export const governanceProposals = pgTable('governance_proposals', {
 });
 
 export const governanceChangeSets = pgTable('governance_change_sets', {
-  id: uuid('id').defaultRandom().primaryKey(), runId: uuid('run_id').notNull(), scopeSnapshot: jsonb('scope_snapshot').notNull(), exclusionIds: text('exclusion_ids').array().notNull(), ruleSetId: uuid('rule_set_id').notNull(), ruleSetVersion: integer('rule_set_version').notNull(), idempotencyKey: text('idempotency_key').notNull(), permitId: uuid('permit_id'), executionMode: text('execution_mode').notNull(), status: text('status').notNull(), summary: jsonb('summary').notNull(), rollbackUntil: timestamp('rollback_until', { withTimezone: true }), executedAt: timestamp('executed_at', { withTimezone: true }), createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(), updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  id: uuid('id').defaultRandom().primaryKey(), runId: uuid('run_id').notNull(), scopeSnapshot: jsonb('scope_snapshot').notNull(), exclusionIds: text('exclusion_ids').array().notNull(), ruleSetId: uuid('rule_set_id').notNull(), ruleSetVersion: integer('rule_set_version').notNull(), idempotencyKey: text('idempotency_key').notNull(), permitId: uuid('permit_id').references((): AnyPgColumn => governanceExecutionPermits.id), executionMode: text('execution_mode').notNull(), status: text('status').notNull(), summary: jsonb('summary').notNull(), rollbackUntil: timestamp('rollback_until', { withTimezone: true }), executedAt: timestamp('executed_at', { withTimezone: true }), createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(), updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
   uniqueIndex('governance_change_sets_permit_unique').on(t.permitId).where(sql`${t.permitId} is not null`),
 ]);
@@ -137,7 +137,7 @@ export const agentCapabilityGrants = pgTable('agent_capability_grants', {
   id: uuid('id').defaultRandom().primaryKey(),
   triggerType: text('trigger_type').notNull(),
   agentId: text('agent_id').notNull(),
-  initiatedBy: uuid('initiated_by'),
+  initiatedBy: uuid('initiated_by').references(() => adminUsers.id),
   scopes: text('scopes').array().notNull().default([]),
   inputSnapshotHash: text('input_snapshot_hash'),
   sourceConstraints: jsonb('source_constraints').notNull().default({}),
@@ -145,6 +145,10 @@ export const agentCapabilityGrants = pgTable('agent_capability_grants', {
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const adminUsers = pgTable('admin_users', {
+  id: uuid('id').primaryKey(),
 });
 
 export const templateAutopublishSourceItems = pgTable('template_autopublish_source_items', {
@@ -168,23 +172,23 @@ export const templateAutopublishRuns = pgTable('template_autopublish_runs', {
   status: text('status').notNull().default('queued'),
   currentStage: text('current_stage').notNull().default('queued'),
   triggerType: text('trigger_type').notNull(),
-  requestedBy: uuid('requested_by'),
+  requestedBy: uuid('requested_by').references(() => adminUsers.id),
   agentId: text('agent_id'),
-  capabilityGrantId: uuid('capability_grant_id').notNull(),
+  capabilityGrantId: uuid('capability_grant_id').notNull().references(() => agentCapabilityGrants.id),
   flowType: text('flow_type').notNull(),
   sourceType: text('source_type').notNull(),
   sourceItemId: text('source_item_id').notNull(),
   inputSnapshot: jsonb('input_snapshot').notNull(),
   inputSnapshotHash: text('input_snapshot_hash').notNull(),
-  ruleSetId: uuid('rule_set_id').notNull(),
+  ruleSetId: uuid('rule_set_id').notNull().references(() => governanceRuleSets.id),
   ruleSetVersion: integer('rule_set_version').notNull(),
   taxonomySnapshotHash: text('taxonomy_snapshot_hash').notNull(),
   promptVersion: text('prompt_version').notNull(),
   budgetSnapshot: jsonb('budget_snapshot').notNull(),
   budgetConsumed: jsonb('budget_consumed').notNull().default({}),
   repairCount: integer('repair_count').notNull().default(0),
-  templateId: text('template_id'),
-  changeSetId: uuid('change_set_id'),
+  templateId: text('template_id').references(() => promptTemplates.id),
+  changeSetId: uuid('change_set_id').references(() => governanceChangeSets.id),
   idempotencyKey: text('idempotency_key').notNull(),
   leaseToken: text('lease_token'),
   leaseUntil: timestamp('lease_until', { withTimezone: true }),
@@ -201,25 +205,25 @@ export const templateAutopublishRuns = pgTable('template_autopublish_runs', {
 
 export const templateAutopublishArtifacts = pgTable('template_autopublish_artifacts', {
   id: uuid('id').defaultRandom().primaryKey(),
-  runId: uuid('run_id').notNull(),
+  runId: uuid('run_id').notNull().references(() => templateAutopublishRuns.id, { onDelete: 'cascade' }),
   kind: text('kind').notNull(),
   schemaVersion: integer('schema_version').notNull().default(1),
   contentHash: text('content_hash').notNull(),
   payload: jsonb('payload').notNull(),
-  modelId: uuid('model_id'),
+  modelId: uuid('model_id').references(() => providerModels.id),
   promptVersion: text('prompt_version'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex('template_autopublish_artifacts_run_kind_content_unique').on(t.runId, t.kind, t.contentHash)]);
 
 export const templateAutopublishStageAttempts = pgTable('template_autopublish_stage_attempts', {
   id: uuid('id').defaultRandom().primaryKey(),
-  runId: uuid('run_id').notNull(),
+  runId: uuid('run_id').notNull().references(() => templateAutopublishRuns.id, { onDelete: 'cascade' }),
   stage: text('stage').notNull(),
   attempt: integer('attempt').notNull(),
   status: text('status').notNull(),
   inputHash: text('input_hash').notNull(),
-  artifactId: uuid('artifact_id'),
-  generationJobId: uuid('generation_job_id'),
+  artifactId: uuid('artifact_id').references(() => templateAutopublishArtifacts.id),
+  generationJobId: uuid('generation_job_id').references(() => generationJobs.id),
   usage: jsonb('usage').notNull().default({}),
   errorCode: text('error_code'),
   errorDetails: jsonb('error_details'),
@@ -232,7 +236,7 @@ export const templateAutopublishStageAttempts = pgTable('template_autopublish_st
 
 export const templateAutopublishOutbox = pgTable('template_autopublish_outbox', {
   id: uuid('id').defaultRandom().primaryKey(),
-  runId: uuid('run_id').notNull(),
+  runId: uuid('run_id').notNull().references(() => templateAutopublishRuns.id, { onDelete: 'cascade' }),
   eventType: text('event_type').notNull(),
   dedupeKey: text('dedupe_key').notNull(),
   payload: jsonb('payload').notNull().default({}),
@@ -248,10 +252,10 @@ export const templateAutopublishOutbox = pgTable('template_autopublish_outbox', 
 
 export const governanceExecutionPermits = pgTable('governance_execution_permits', {
   id: uuid('id').defaultRandom().primaryKey(),
-  autopublishRunId: uuid('autopublish_run_id').notNull(),
-  templateId: text('template_id').notNull(),
+  autopublishRunId: uuid('autopublish_run_id').notNull().references(() => templateAutopublishRuns.id, { onDelete: 'cascade' }),
+  templateId: text('template_id').notNull().references(() => promptTemplates.id),
   templateVersion: integer('template_version').notNull(),
-  ruleSetId: uuid('rule_set_id').notNull(),
+  ruleSetId: uuid('rule_set_id').notNull().references(() => governanceRuleSets.id),
   ruleSetVersion: integer('rule_set_version').notNull(),
   action: text('action').notNull(),
   contentHash: text('content_hash').notNull(),
