@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { and, asc, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { classifyGovernanceRisk, governanceRuleSetSchema, modelCapabilitySchema, taxonomySlugSchema, templateDraftSchema, type TemplateVersionSnapshot } from '@promptix/shared';
+import { classifyGovernanceRisk, governanceRuleSetSchema, modelCapabilitySchema, recommendationEventInputSchema, taxonomySlugSchema, templateDraftSchema, type TemplateVersionSnapshot } from '@promptix/shared';
 import { getDb } from '../db/client.js';
 import { agentRuns, generationJobs, governanceAuditEvents, governanceChangeSetItems, governanceChangeSets, governanceProposals, governanceRuleSets, mediaObjects, promptTemplates, providerModels, providers, taxonomyTerms, templateAssets, templateTaxonomyAssignments, templateVersions } from '../db/schema.js';
 import { requireAdmin, requireOwner, type AdminVars } from '../lib/auth.js';
@@ -13,6 +13,7 @@ import { loadTemplateSemanticViews, type TemplateSemanticView } from '../lib/tem
 import { assertConfirmableSemantic, legacyCategoryForOutputType, resolveSemanticTerms, TaxonomyValidationError } from '../lib/taxonomy.js';
 import { buildTemplateVersionSnapshot, recordInitialTemplateVersion, updateTemplateWithVersion } from '../lib/template-versioning.js';
 import { getSimilarTemplateResponse } from '../services/similar-template-service.js';
+import { recordClientRecommendationEvent } from '../services/recommendation-event-service.js';
 
 const templateInput = templateDraftSchema.extend({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,79}$/).optional(),
@@ -226,6 +227,26 @@ publicTemplateRoutes.get('/:id/similar', async (c) => {
   return result
     ? ok(c, result)
     : fail(c, 'NOT_FOUND', 'Template not found', 404);
+});
+
+publicTemplateRoutes.post('/:id/recommendation-events', async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const parsed = recommendationEventInputSchema.safeParse(body);
+  if (!parsed.success) {
+    return fail(
+      c,
+      'VALIDATION_ERROR',
+      parsed.error.issues[0]?.message ?? 'Invalid event',
+      400,
+    );
+  }
+  const result = await recordClientRecommendationEvent({
+    sourceTemplateId: c.req.param('id'),
+    ...parsed.data,
+  });
+  return result.ok
+    ? ok(c, { recorded: result.recorded })
+    : fail(c, 'RECOMMENDATION_REQUEST_INVALID', result.reason, 409);
 });
 
 publicTemplateRoutes.get('/:id', async (c) => {
