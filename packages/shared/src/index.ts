@@ -652,3 +652,4 @@ export const apiErrorSchema = z.object({
 export type ApiErrorBody = z.infer<typeof apiErrorSchema>;
 
 export * from './template-governance.js';
+export * from './template-autopublish.js';

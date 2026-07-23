@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { autopublishRulesSchema } from './template-autopublish.js';
 
 const uniqueStrings = (maximum: number, minimum = 0) => z.array(z.string().trim().min(1).max(120)).min(minimum).max(maximum)
   .refine((values) => new Set(values).size === values.length, 'Values must be unique');
@@ -44,7 +45,7 @@ export const governanceChangeSetStatusSchema = z.enum([
 ]);
 export type GovernanceChangeSetStatus = z.infer<typeof governanceChangeSetStatusSchema>;
 
-export const governanceExecutionModeSchema = z.enum(['automatic', 'approval']);
+export const governanceExecutionModeSchema = z.enum(['automatic', 'approval', 'legacy_mixed', 'autopilot']);
 export type GovernanceExecutionMode = z.infer<typeof governanceExecutionModeSchema>;
 
 export const governanceProposalStatusSchema = z.enum([
@@ -143,6 +144,7 @@ export const governanceSemanticSchema = z.object({
 export type GovernanceSemantic = z.infer<typeof governanceSemanticSchema>;
 
 export const governanceRuleSetSchema = z.object({
+  autopublish: autopublishRulesSchema,
   agent: z.object({
     modelId: z.string().uuid().nullable().default(null),
     promptVersion: z.string().trim().min(1).max(120).default('template-governance-v1'),

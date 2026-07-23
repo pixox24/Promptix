@@ -55,7 +55,7 @@ test('governance queue identifiers are stable machine values', () => {
 });
 
 test('change sets have one execution mode and one canonical summary vocabulary', () => {
-  assert.deepEqual(governanceExecutionModeSchema.options, ['automatic', 'approval']);
+  assert.deepEqual(governanceExecutionModeSchema.options, ['automatic', 'approval', 'legacy_mixed', 'autopilot']);
   assert.deepEqual(governanceChangeSetSummarySchema.parse({ total: 2, automatic: 1, awaitingApproval: 1 }), {
     total: 2,
     automatic: 1,
