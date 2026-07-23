@@ -428,6 +428,7 @@ export const publicGenerationCreateSchema = z.object({
   values: z.record(z.string().max(4000)),
   promptOverride: z.string().trim().min(1).max(20_000).optional(),
   clientRequestId: z.string().uuid(),
+  recommendationRequestId: z.string().uuid().optional(),
 });
 export type PublicGenerationCreate = z.infer<typeof publicGenerationCreateSchema>;
 
@@ -603,6 +604,44 @@ export const publicTemplateSchema = z.object({
   locale: z.string().default('zh'),
 });
 export type PublicTemplate = z.infer<typeof publicTemplateSchema>;
+
+export const recommendationReasonCodeSchema = z.enum([
+  'same_output_type',
+  'shared_scenario',
+  'shared_style',
+  'shared_subject',
+  'shared_tags',
+  'popular',
+]);
+export type RecommendationReasonCode = z.infer<typeof recommendationReasonCodeSchema>;
+
+export const similarTemplateItemSchema = z.object({
+  template: publicTemplateSchema,
+  score: z.number().finite().nonnegative(),
+  position: z.number().int().min(1).max(12),
+  reasonCodes: z.array(recommendationReasonCodeSchema).min(1).max(2),
+  reasonLabel: z.string().trim().min(1).max(120),
+});
+export type SimilarTemplateItem = z.infer<typeof similarTemplateItemSchema>;
+
+export const similarTemplateResponseSchema = z.object({
+  requestId: z.string().uuid(),
+  algorithmVersion: z.literal('similar-v1'),
+  items: z.array(similarTemplateItemSchema).max(12),
+});
+export type SimilarTemplateResponse = z.infer<typeof similarTemplateResponseSchema>;
+
+export const recommendationEventInputSchema = z.object({
+  requestId: z.string().uuid(),
+  eventType: z.enum(['impression', 'click']),
+  recommendedTemplateId: z.string().trim().min(1).max(120),
+}).strict();
+export type RecommendationEventInput = z.infer<typeof recommendationEventInputSchema>;
+
+export const recommendationContextSchema = z.object({
+  recommendationRequestId: z.string().uuid(),
+});
+export type RecommendationContext = z.infer<typeof recommendationContextSchema>;
 
 export const apiErrorSchema = z.object({
   error: z.object({
