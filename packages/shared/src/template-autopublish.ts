@@ -90,7 +90,7 @@ export const autopublishCreateInputSchema = z.object({
   idempotencyKey: z.string().trim().min(8).max(200),
 }).strict();
 
-export const autopublishRunSchema = z.object({
+const autopublishRunBaseSchema = z.object({
   id: z.string().uuid(),
   status: autopublishRunStatusSchema,
   currentStage: autopublishStageSchema,
@@ -119,6 +119,72 @@ export const autopublishRunSchema = z.object({
   finishedAt: z.string().datetime().nullable(),
   observationUntil: z.string().datetime().nullable(),
   rollbackUntil: z.string().datetime().nullable(),
+});
+export const autopublishRunSchema = autopublishRunBaseSchema.superRefine((run, ctx) => {
+  const budgetLimits = [
+    ['modelCalls', 'maximumModelCalls', 'Model calls cannot exceed budgetSnapshot.maximumModelCalls'],
+    ['coverAttempts', 'maximumCoverAttempts', 'Cover attempts cannot exceed budgetSnapshot.maximumCoverAttempts'],
+    ['durationMinutes', 'maximumDurationMinutes', 'Duration cannot exceed budgetSnapshot.maximumDurationMinutes'],
+  ] as const;
+  for (const [consumedKey, budgetKey, message] of budgetLimits) {
+    if (run.budgetConsumed[consumedKey] > run.budgetSnapshot[budgetKey]) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['budgetConsumed', consumedKey], message });
+    }
+  }
+
+  if (run.status === 'succeeded') {
+    const requiredFields = [
+      ['finishedAt', 'Succeeded runs require finishedAt'],
+      ['templateId', 'Succeeded runs require templateId'],
+      ['permitId', 'Succeeded runs require permitId'],
+      ['changeSetId', 'Succeeded runs require changeSetId'],
+      ['observationUntil', 'Succeeded runs require observationUntil'],
+      ['rollbackUntil', 'Succeeded runs require rollbackUntil'],
+    ] as const;
+    for (const [field, message] of requiredFields) {
+      if (run[field] === null) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message });
+    }
+    if (run.finishedAt !== null) {
+      const minimumDeadline = Date.parse(run.finishedAt) + (72 * 60 * 60 * 1000);
+      for (const [field, value] of [
+        ['observationUntil', run.observationUntil],
+        ['rollbackUntil', run.rollbackUntil],
+      ] as const) {
+        if (value !== null && Date.parse(value) < minimumDeadline) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [field],
+            message: `${field} must be at least 72 hours after finishedAt`,
+          });
+        }
+      }
+    }
+  } else {
+    for (const [field, value] of [
+      ['observationUntil', run.observationUntil],
+      ['rollbackUntil', run.rollbackUntil],
+    ] as const) {
+      if (value !== null) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: `${field} is only set after a succeeded run` });
+      }
+    }
+  }
+
+  if (run.status === 'duplicate_found') {
+    if (run.templateId === null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['templateId'], message: 'duplicate_found runs require an existing templateId' });
+    }
+    for (const [field, value] of [
+      ['permitId', run.permitId],
+      ['changeSetId', run.changeSetId],
+      ['observationUntil', run.observationUntil],
+      ['rollbackUntil', run.rollbackUntil],
+    ] as const) {
+      if (value !== null) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: `duplicate_found runs must not set ${field}` });
+      }
+    }
+  }
 });
 export type AutopublishRun = z.infer<typeof autopublishRunSchema>;
 
