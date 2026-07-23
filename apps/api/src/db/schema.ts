@@ -479,6 +479,59 @@ export const generationJobs = pgTable(
   ],
 );
 
+export const templateRecommendationRequests = pgTable(
+  'template_recommendation_requests',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    sourceTemplateId: text('source_template_id').notNull()
+      .references(() => promptTemplates.id, { onDelete: 'cascade' }),
+    algorithmVersion: text('algorithm_version').notNull(),
+    candidateIds: text('candidate_ids').array().notNull(),
+    scoreSnapshot: jsonb('score_snapshot').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index('template_recommendation_requests_source_created_idx')
+      .on(t.sourceTemplateId, t.createdAt),
+    index('template_recommendation_requests_expires_idx').on(t.expiresAt),
+  ],
+);
+
+export const templateRecommendationEvents = pgTable(
+  'template_recommendation_events',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    requestId: uuid('request_id').notNull()
+      .references(() => templateRecommendationRequests.id, { onDelete: 'cascade' }),
+    sourceTemplateId: text('source_template_id').notNull()
+      .references(() => promptTemplates.id, { onDelete: 'cascade' }),
+    recommendedTemplateId: text('recommended_template_id').notNull()
+      .references(() => promptTemplates.id, { onDelete: 'cascade' }),
+    eventType: text('event_type').notNull(),
+    position: integer('position').notNull(),
+    generationJobId: uuid('generation_job_id')
+      .references(() => generationJobs.id, { onDelete: 'set null' }),
+    dedupeKey: text('dedupe_key').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('template_recommendation_events_dedupe_key_uidx').on(t.dedupeKey),
+    index('template_recommendation_events_pair_type_created_idx')
+      .on(t.sourceTemplateId, t.recommendedTemplateId, t.eventType, t.createdAt),
+    index('template_recommendation_events_request_created_idx')
+      .on(t.requestId, t.createdAt),
+    check(
+      'template_recommendation_events_event_type_check',
+      sql`${t.eventType} in ('impression','click','generation_succeeded')`,
+    ),
+    check(
+      'template_recommendation_events_position_check',
+      sql`${t.position} between 1 and 12`,
+    ),
+  ],
+);
+
 export const mediaObjects = pgTable(
   'media_objects',
   {

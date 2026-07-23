@@ -113,6 +113,13 @@
       "when": 1784732400000,
       "tag": "0015_repair_governance_coordination",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1784784000000,
+      "tag": "0016_similar_template_recommendation_loop",
+      "breakpoints": true
     }
   ]
 }
