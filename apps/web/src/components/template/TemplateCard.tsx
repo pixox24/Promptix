@@ -4,12 +4,25 @@ import type { PromptTemplate } from '../../types/prompt';
 import { useLibrary } from '../../context/UserLibraryContext';
 import { useToast } from '../../context/ToastContext';
 import { buildTemplateCardPrompt } from '../../lib/templateCardPrompt';
+import { recordRecommendationEvent } from '../../data/templateApi';
+import { useRecommendationImpression } from '../../hooks/useRecommendationImpression';
+import { recommendationTemplateTarget } from '../../lib/recommendationNavigation';
+import type { SimilarTemplateViewItem } from '../../types/recommendation';
 import { IconCopy, IconHeart } from '../icons';
 
 interface TemplateCardProps {
   template: PromptTemplate;
   compact?: boolean;
-  onNavigateRequest?: (template: PromptTemplate, event: MouseEvent<HTMLAnchorElement>) => void;
+  onNavigateRequest?: (
+    template: PromptTemplate,
+    event: MouseEvent<HTMLAnchorElement>,
+    target?: string,
+  ) => void;
+  recommendation?: {
+    sourceTemplateId: string;
+    requestId: string;
+    item?: SimilarTemplateViewItem;
+  };
 }
 
 function formatCount(n: number): string {
@@ -24,13 +37,22 @@ function formatCount(n: number): string {
  * Pixel-level recreation of HeroPrompt card:
  * rounded-[6px], aspect-[3/4], lime tags, heart count + prompt copy footer
  */
-export function TemplateCard({ template, onNavigateRequest }: TemplateCardProps) {
+export function TemplateCard({ template, onNavigateRequest, recommendation }: TemplateCardProps) {
   const { isFavorite, toggleFavorite } = useLibrary();
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
   const copiedResetTimer = useRef<number | null>(null);
   const fav = isFavorite(template.id);
   const displayCount = template.favoriteCount || template.useCount;
+  const target = recommendationTemplateTarget(
+    template.id,
+    recommendation?.requestId ?? null,
+  );
+  const impressionRef = useRecommendationImpression(
+    recommendation?.sourceTemplateId ?? '',
+    template.id,
+    recommendation?.requestId ?? null,
+  );
 
   useEffect(() => () => {
     if (copiedResetTimer.current !== null) window.clearTimeout(copiedResetTimer.current);
@@ -58,9 +80,28 @@ export function TemplateCard({ template, onNavigateRequest }: TemplateCardProps)
 
   return (
     <Link
-      to={`/template/${template.id}`}
+      ref={impressionRef}
+      to={target}
       className="group block h-full w-full"
-      onClick={event => onNavigateRequest?.(template, event)}
+      onClick={event => {
+        if (
+          recommendation &&
+          event.button === 0 &&
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.shiftKey &&
+          !event.altKey
+        ) {
+          void recordRecommendationEvent(recommendation.sourceTemplateId, {
+            requestId: recommendation.requestId,
+            eventType: 'click',
+            recommendedTemplateId: template.id,
+          }).catch((error: unknown) => {
+            console.warn('recommendation click failed', error);
+          });
+        }
+        onNavigateRequest?.(template, event, target);
+      }}
     >
       <div className="group relative flex h-full cursor-zoom-in flex-col overflow-hidden rounded-[8px] border border-gray-100 bg-white shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
         {/* Image 3:4 */}
@@ -85,6 +126,11 @@ export function TemplateCard({ template, onNavigateRequest }: TemplateCardProps)
 
         {/* Meta body */}
         <div className="flex flex-col gap-3 p-4">
+          {recommendation?.item?.reasonLabel && (
+            <p className="line-clamp-1 text-[11px] font-medium text-slate-500">
+              {recommendation.item.reasonLabel}
+            </p>
+          )}
           <div className="flex h-[20px] flex-wrap gap-1.5 overflow-hidden">
             {template.tags.map((tag) => (
               <span

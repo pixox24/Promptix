@@ -1,3 +1,7 @@
+import type {
+  RecommendationEventInput,
+  SimilarTemplateResponse,
+} from '@promptix/shared';
 import type { PromptTemplate, SortOption } from '../types/prompt';
 import { api } from '../lib/api';
 
@@ -11,3 +15,20 @@ export async function fetchTemplates(filters:TemplateFilters={}, signal?:AbortSi
   return api<TemplateListResponse>(`/api/templates?${params}`, { signal });
 }
 export function fetchTemplate(id:string){return api<PromptTemplate>(`/api/templates/${encodeURIComponent(id)}`);}
+
+export function fetchSimilarTemplates(id:string, signal?:AbortSignal) {
+  return api<SimilarTemplateResponse>(
+    `/api/templates/${encodeURIComponent(id)}/similar?limit=4`,
+    { signal },
+  );
+}
+
+export function recordRecommendationEvent(
+  sourceId: string,
+  input: RecommendationEventInput,
+) {
+  return api<{ recorded: boolean }>(
+    `/api/templates/${encodeURIComponent(sourceId)}/recommendation-events`,
+    { method: 'POST', body: JSON.stringify(input) },
+  );
+}

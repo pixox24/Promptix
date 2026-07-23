@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PublicGenerationCreate, PublicGenerationJob } from '@promptix/shared';
 import { createGeneration, getGeneration, retryGeneration } from '../components/detail/generationApi';
+import { ApiError } from '../lib/api';
 
-export function usePublicGeneration(onSuccess: (job: PublicGenerationJob) => void) {
+export function usePublicGeneration(
+  onSuccess: (job: PublicGenerationJob) => void,
+  onRecommendationInvalid?: () => void,
+) {
   const [job, setJob] = useState<PublicGenerationJob | null>(null);
   const [error, setError] = useState('');
   const timer = useRef<number | undefined>(undefined);
@@ -22,9 +26,29 @@ export function usePublicGeneration(onSuccess: (job: PublicGenerationJob) => voi
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const create = useCallback(async (input: PublicGenerationCreate) => {
     window.clearTimeout(timer.current); setError('');
-    try { const next = await createGeneration(input); setJob(next); void poll(next); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : '创建生成任务失败'); }
-  }, [poll]);
+    try {
+      let next;
+      try {
+        next = await createGeneration(input);
+      } catch (reason) {
+        if (
+          reason instanceof ApiError &&
+          reason.code === 'RECOMMENDATION_REQUEST_INVALID' &&
+          input.recommendationRequestId
+        ) {
+          onRecommendationInvalid?.();
+          const { recommendationRequestId: _ignored, ...withoutAttribution } = input;
+          next = await createGeneration(withoutAttribution);
+        } else {
+          throw reason;
+        }
+      }
+      setJob(next);
+      void poll(next);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '创建生成任务失败');
+    }
+  }, [onRecommendationInvalid, poll]);
   const retry = useCallback(async () => {
     if (!job?.accessToken) return;
     setError('');

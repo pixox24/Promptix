@@ -1,4 +1,5 @@
 import { publicGenerationJobSchema, type PublicGenerationCreate, type PublicGenerationJob } from '@promptix/shared';
+import { ApiError } from '../../lib/api';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
@@ -8,7 +9,11 @@ async function request(path: string, init?: RequestInit): Promise<PublicGenerati
     headers: { 'content-type': 'application/json', ...init?.headers },
   });
   const body = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(body?.error?.message ?? '生成服务暂时不可用');
+  if (!response.ok) throw new ApiError(
+    body?.error?.code ?? 'REQUEST_FAILED',
+    body?.error?.message ?? '生成服务暂时不可用',
+    response.status,
+  );
   return publicGenerationJobSchema.parse(body?.data ?? body);
 }
 

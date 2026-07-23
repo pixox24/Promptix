@@ -1,5 +1,6 @@
 import type { MouseEvent } from 'react';
 import type { PromptTemplate } from '../../types/prompt';
+import type { SimilarTemplateViewItem } from '../../types/recommendation';
 import { EmptyState } from '../ui/EmptyState';
 import { TemplateCardSkeleton } from '../ui/Skeleton';
 import { IconSearch } from '../icons';
@@ -11,7 +12,14 @@ interface TemplateGridProps {
   emptyTitle?: string;
   emptyDescription?: string;
   density?: 'dense' | 'comfortable';
-  onNavigateRequest?: (template: PromptTemplate, event: MouseEvent<HTMLAnchorElement>) => void;
+  onNavigateRequest?: (
+    template: PromptTemplate,
+    event: MouseEvent<HTMLAnchorElement>,
+    target?: string,
+  ) => void;
+  recommendationItems?: SimilarTemplateViewItem[];
+  recommendationSourceId?: string;
+  recommendationRequestId?: string | null;
 }
 
 /** HeroPrompt: grid-cols-1 sm:2 lg:3 xl:4 2xl:5 gap-[2px] */
@@ -21,6 +29,9 @@ export function TemplateGrid({
   emptyTitle = '没有找到匹配的模板',
   emptyDescription = '试试调整关键词或筛选条件。',
   onNavigateRequest,
+  recommendationItems,
+  recommendationSourceId,
+  recommendationRequestId,
 }: TemplateGridProps) {
   if (loading) {
     return (
@@ -47,7 +58,18 @@ export function TemplateGrid({
   return (
     <div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
       {templates.map((t) => (
-        <TemplateCard key={t.id} template={t} onNavigateRequest={onNavigateRequest} />
+        <TemplateCard
+          key={t.id}
+          template={t}
+          onNavigateRequest={onNavigateRequest}
+          recommendation={recommendationSourceId && recommendationRequestId
+            ? {
+                sourceTemplateId: recommendationSourceId,
+                requestId: recommendationRequestId,
+                item: recommendationItems?.find((item) => item.template.id === t.id),
+              }
+            : undefined}
+        />
       ))}
     </div>
   );
