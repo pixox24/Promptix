@@ -87,7 +87,12 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
         output = { proposals, persisted, execution };
       } else if (jobType === 'image_generate') {
         output = await generateImage(primary, record.input as Record<string, unknown>);
-        output = await persistGeneratedOutput(record.id, record.templateId, output);
+        output = await persistGeneratedOutput(
+          record.id,
+          record.templateId,
+          output,
+          record.input as Record<string, unknown>,
+        );
       } else if (jobType === 'image_reverse') {
         const imageUrl = (record.input as { imageUrl?: unknown }).imageUrl;
         if (typeof imageUrl !== 'string') {

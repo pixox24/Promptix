@@ -1,10 +1,11 @@
 import { putObject } from '@promptix/storage';
 import { eq, isNull, and, sql } from 'drizzle-orm';
 import { db, generationJobs, mediaObjects, promptTemplates } from './db.js';
+import { recordRecommendationGenerationSuccessSafely } from './recommendation-attribution.js';
 
 type RawImage={url?:string;b64_json?:string;width?:number;height?:number};
 function extension(mime:string){return mime.includes('webp')?'webp':mime.includes('jpeg')?'jpg':'png'}
-export async function persistGeneratedOutput(jobId:string,templateId:string|null,output:unknown){
+export async function persistGeneratedOutput(jobId:string,templateId:string|null,output:unknown,input:Record<string,unknown>={}){
   const raw=(output as {images?:RawImage[]}|null)?.images??[];const expiresAt=new Date(Date.now()+7*86400000);const images=[];
   for(const [index,image] of raw.entries()){
     let bytes:Buffer;let mime='image/png';
@@ -14,6 +15,6 @@ export async function persistGeneratedOutput(jobId:string,templateId:string|null
     images.push({url:stored.url,mime,width:image.width,height:image.height,expiresAt:expiresAt.toISOString()});
   }
   if(!images.length)throw new Error('Image provider returned no persistable images');
-  if(templateId){const recorded=await db.update(generationJobs).set({usageRecordedAt:new Date()}).where(and(eq(generationJobs.id,jobId),isNull(generationJobs.usageRecordedAt))).returning({id:generationJobs.id});if(recorded.length)await db.update(promptTemplates).set({useCount:sql`${promptTemplates.useCount} + 1`}).where(eq(promptTemplates.id,templateId))}
+  if(templateId){const recorded=await db.update(generationJobs).set({usageRecordedAt:new Date()}).where(and(eq(generationJobs.id,jobId),isNull(generationJobs.usageRecordedAt))).returning({id:generationJobs.id});if(recorded.length){await db.update(promptTemplates).set({useCount:sql`${promptTemplates.useCount} + 1`}).where(eq(promptTemplates.id,templateId));await recordRecommendationGenerationSuccessSafely({jobId,templateId,recommendationRequestId:typeof input.recommendationRequestId==='string'?input.recommendationRequestId:undefined})}}
   return {...(output as Record<string,unknown>),images};
 }

@@ -60,6 +60,31 @@ export const promptTemplates = pgTable('prompt_templates', {
   name: text('name').notNull(), summary: text('summary').notNull(), description: text('description').notNull(), category: text('category').notNull(), workflowType: text('workflow_type').notNull(), outputTypeId: uuid('output_type_id'), tags: text('tags').array().notNull(), scenarios: text('scenarios').array().notNull(), taxonomyReviewStatus: text('taxonomy_review_status').notNull(), taxonomyReviewedAt: timestamp('taxonomy_reviewed_at', { withTimezone: true }), taxonomyReviewedBy: uuid('taxonomy_reviewed_by'), unmappedTerms: jsonb('unmapped_terms').notNull(), classificationMeta: jsonb('classification_meta'), variables: jsonb('variables').notNull(), promptTemplate: text('prompt_template').notNull(), negativePrompt: text('negative_prompt'), coverObjectKey: text('cover_object_key'), coverUrl: text('cover_url'), status: text('status').notNull(), publishedAt: timestamp('published_at', { withTimezone: true }), isFeatured: boolean('is_featured').notNull(), featuredOrder: integer('featured_order').notNull(), isHot: boolean('is_hot').notNull(), source: text('source').notNull(), sourceMeta: jsonb('source_meta'), modelHints: jsonb('model_hints'), i18n: jsonb('i18n'), locale: text('locale').notNull(), currentVersion: integer('current_version').notNull(), deletedAt: timestamp('deleted_at', { withTimezone: true }), deletedBy: uuid('deleted_by'), deletionReason: text('deletion_reason'), updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
   useCount: integer('use_count').notNull(),
 });
+
+export const templateRecommendationRequests = pgTable('template_recommendation_requests', {
+  id: uuid('id').primaryKey(),
+  sourceTemplateId: text('source_template_id').notNull(),
+  algorithmVersion: text('algorithm_version').notNull(),
+  candidateIds: text('candidate_ids').array().notNull(),
+  scoreSnapshot: jsonb('score_snapshot').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+});
+
+export const templateRecommendationEvents = pgTable('template_recommendation_events', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  requestId: uuid('request_id').notNull(),
+  sourceTemplateId: text('source_template_id').notNull(),
+  recommendedTemplateId: text('recommended_template_id').notNull(),
+  eventType: text('event_type').notNull(),
+  position: integer('position').notNull(),
+  generationJobId: uuid('generation_job_id'),
+  dedupeKey: text('dedupe_key').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('template_recommendation_events_dedupe_key_uidx').on(table.dedupeKey),
+]);
+
 export const templateGovernanceState = pgTable('template_governance_state', {
   templateId: text('template_id').primaryKey(), lastScanAt: timestamp('last_scan_at', { withTimezone: true }), leaseUntil: timestamp('lease_until', { withTimezone: true }), leaseToken: text('lease_token'), lastRunId: uuid('last_run_id'), updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

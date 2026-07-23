@@ -17,6 +17,7 @@ import {
   providerModels,
   providers,
   promptTemplates,
+  templateRecommendationRequests,
 } from "../db/schema.js";
 import { loadEnv } from "../config/env.js";
 import { enqueueGenerationJob } from "../lib/job-enqueue.js";
@@ -194,6 +195,33 @@ generationRoutes.post("/", async (c) => {
     )
     .limit(1);
   if (!template) return fail(c, "NOT_FOUND", "Template not found", 404);
+  if (parsed.data.recommendationRequestId) {
+    const [recommendationRequest] = await db
+      .select({
+        id: templateRecommendationRequests.id,
+        expiresAt: templateRecommendationRequests.expiresAt,
+      })
+      .from(templateRecommendationRequests)
+      .where(
+        and(
+          eq(
+            templateRecommendationRequests.id,
+            parsed.data.recommendationRequestId,
+          ),
+          sql`${template.id} = ANY(${templateRecommendationRequests.candidateIds})`,
+          sql`${templateRecommendationRequests.expiresAt} > now()`,
+        ),
+      )
+      .limit(1);
+    if (!recommendationRequest) {
+      return fail(
+        c,
+        "RECOMMENDATION_REQUEST_INVALID",
+        "推荐来源已失效，请重新生成",
+        409,
+      );
+    }
+  }
   const templateVariables = promptVariableSchema.array().parse(template.variables);
   const issues = validatePromptValues(templateVariables, parsed.data.values);
   if (issues.length)
@@ -235,6 +263,9 @@ generationRoutes.post("/", async (c) => {
         prompt,
         ...(ratio ? { aspectRatio: ratio } : {}),
         clientRequestId: parsed.data.clientRequestId,
+        ...(parsed.data.recommendationRequestId
+          ? { recommendationRequestId: parsed.data.recommendationRequestId }
+          : {}),
         negativePrompt: template.negativePrompt,
       },
     })
