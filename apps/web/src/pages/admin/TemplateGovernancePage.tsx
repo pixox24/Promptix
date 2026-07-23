@@ -12,7 +12,7 @@ import { GovernanceRunStatusBar } from '../../components/admin/governance/Govern
 import { GovernanceStatePanel } from '../../components/admin/governance/GovernanceStatePanel';
 import { GovernanceTemplateTable } from '../../components/admin/governance/GovernanceTemplateTable';
 import { GovernanceToolbar } from '../../components/admin/governance/GovernanceToolbar';
-import { createGovernanceRun, fetchGovernanceRun, fetchGovernanceRunStats, previewTemplateDeletion, requestTemplateDeletion } from '../../data/templateGovernanceApi';
+import { confirmTemplateTaxonomy, createGovernanceRun, fetchGovernanceRun, fetchGovernanceRunStats, previewTemplateDeletion, requestTemplateDeletion, requestTemplatePublish } from '../../data/templateGovernanceApi';
 import { useGovernanceRuns } from '../../hooks/useGovernanceRuns';
 import { useTemplateGovernance } from '../../hooks/useTemplateGovernance';
 import { useToast } from '../../context/ToastContext';
@@ -23,6 +23,7 @@ export function TemplateGovernancePage({ canManage = false }: { canManage?: bool
   const [showRuns, setShowRuns] = useState(false);
   const [focusRequest, setFocusRequest] = useState(0);
   const [deletionBusy, setDeletionBusy] = useState(false);
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const controller = useTemplateGovernance();
   const runs = useGovernanceRuns(controller.refresh);
   const [stats, setStats] = useState<Awaited<ReturnType<typeof fetchGovernanceRunStats>> | null>(null);
@@ -77,6 +78,37 @@ export function TemplateGovernancePage({ canManage = false }: { canManage?: bool
     }
   };
 
+  const confirmTaxonomy = async (templateId: string, expectedVersion: number) => {
+    if (lifecycleBusy) return;
+    setLifecycleBusy(true);
+    try {
+      await confirmTemplateTaxonomy(templateId, expectedVersion);
+      controller.refresh();
+      toast('模板分类已人工确认，现在可以申请发布', 'success');
+    } catch (error) {
+      controller.refresh();
+      toast(error instanceof Error ? error.message : '确认分类失败', 'error');
+    } finally {
+      setLifecycleBusy(false);
+    }
+  };
+
+  const requestPublish = async (templateId: string, expectedVersion: number) => {
+    if (lifecycleBusy) return;
+    setLifecycleBusy(true);
+    try {
+      const result = await requestTemplatePublish(templateId, expectedVersion);
+      controller.refresh();
+      void runs.refresh();
+      toast(`发布审批 ${result.changeSetId.slice(0, 8)} 已创建`, 'success');
+    } catch (error) {
+      controller.refresh();
+      toast(error instanceof Error ? error.message : '发布申请提交失败', 'error');
+    } finally {
+      setLifecycleBusy(false);
+    }
+  };
+
   return <div className="relative flex min-h-[720px] flex-1 flex-col overflow-hidden bg-slate-100">
     <header className="flex flex-wrap items-center justify-between gap-3 border-b bg-white px-5 py-3">
       <div><h1 className="text-lg font-semibold text-slate-900">智能分拣台</h1><p className="text-xs text-slate-500">分类、质量、精选与生命周期治理</p></div>
@@ -98,7 +130,15 @@ export function TemplateGovernancePage({ canManage = false }: { canManage?: bool
         <GovernancePagination hasCursor={Boolean(controller.state.cursor)} hasMore={Boolean(controller.page?.nextCursor)} onFirst={controller.firstPage} onNext={controller.nextPage}/>
         <GovernanceBulkBar selection={controller.selection} pageCount={items.length} total={total} canManage={canManage} busy={deletionBusy} onSelectAll={controller.selectAll} onGenerate={() => setFocusRequest((value) => value + 1)} onDelete={() => { if (controller.selection.mode === 'explicit') void requestDeletion(controller.selection.templateIds); }} onClear={() => controller.setSelection({ mode: 'explicit', templateIds: [], proposalIds: [] })}/>
       </main>
-      <GovernanceInspector detail={controller.detail} canManage={canManage} deletionBusy={deletionBusy} onRequestDelete={(id) => void requestDeletion([id])}/>
+      <GovernanceInspector
+        detail={controller.detail}
+        canManage={canManage}
+        deletionBusy={deletionBusy}
+        lifecycleBusy={lifecycleBusy}
+        onConfirmTaxonomy={(id, expectedVersion) => void confirmTaxonomy(id, expectedVersion)}
+        onRequestPublish={(id, expectedVersion) => void requestPublish(id, expectedVersion)}
+        onRequestDelete={(id) => void requestDeletion([id])}
+      />
     </div>
     {showRules && <GovernanceRulePanel canManage={canManage} onClose={() => setShowRules(false)}/>}
     <GovernanceRunCenter open={showRuns} runs={runs.runs} stats={stats} detail={runs.detail} selectedId={runs.selectedId} loading={runs.loading} error={runs.error} onSelect={runs.selectRun} onRefresh={() => void runs.refresh()} onClose={() => setShowRuns(false)}/>

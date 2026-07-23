@@ -1,5 +1,6 @@
 import { AlertCircle, Bot, CheckCircle2, Clock3, RefreshCw, X } from 'lucide-react';
 import type { GovernanceRunDetail, GovernanceRunStats, GovernanceRunSummary } from '../../../types/templateGovernance';
+import { InlineAlert } from '../../feedback/InlineAlert';
 
 const RUN_LABELS: Record<string, string> = { queued: '排队中', analyzing: '分析中', planned: '计划已生成', auto_executing: '自动执行中', awaiting_approval: '等待审批', partially_succeeded: '部分成功', succeeded: '已完成', failed: '失败', cancelled: '已取消' };
 const active = new Set(['queued', 'analyzing', 'planned', 'auto_executing']);
@@ -26,7 +27,7 @@ export function GovernanceRunCenter({ open, runs, stats, detail, selectedId, loa
   return <div className="fixed inset-0 z-50 bg-slate-950/30" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="ml-auto flex h-full w-full max-w-5xl flex-col bg-white shadow-2xl" aria-label="治理运行中心">
       <header className="flex h-14 items-center justify-between border-b px-5"><div className="flex items-center gap-2"><Bot size={18} className="text-violet-600"/><h2 className="font-semibold">治理运行中心</h2><span className="text-xs text-slate-500">最近 {runs.length} 次</span></div><div className="flex gap-1"><button title="刷新" onClick={onRefresh} className="grid h-9 w-9 place-items-center text-slate-500"><RefreshCw size={16} className={loading ? 'animate-spin' : ''}/></button><button title="关闭" onClick={onClose} className="grid h-9 w-9 place-items-center text-slate-500"><X size={18}/></button></div></header>
-      {error && <p className="border-b border-red-200 bg-red-50 px-5 py-2 text-xs text-red-700">{error}</p>}
+      {error && <InlineAlert type="error" className="mx-5 mt-3 text-xs">{error}</InlineAlert>}
       {stats && <div className="grid grid-cols-2 gap-2 border-b bg-slate-50 px-5 py-3 text-xs sm:grid-cols-4"><Metric label="30天运行" value={stats.total}/><Metric label="成功率" value={`${stats.successRate}%`}/><Metric label="待审批" value={stats.awaitingApproval}/><Metric label="失败" value={stats.failed}/></div>}
       <div className="grid min-h-0 flex-1 md:grid-cols-[300px_minmax(0,1fr)]">
         <aside className="overflow-auto border-r bg-slate-50/70">

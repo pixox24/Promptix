@@ -6,6 +6,7 @@ import type { IngestFlowStatus, IngestPromptConfig } from '../../types/ingest';
 import { IngestEntryCard } from '../../components/admin/ingest/IngestEntryCard';
 import { TextOptimizeFlow } from '../../components/admin/ingest/TextOptimizeFlow';
 import { ImageReverseFlow } from '../../components/admin/ingest/ImageReverseFlow';
+import { InlineAlert } from '../../components/feedback/InlineAlert';
 
 export function IngestPage() {
   const [active, setActive] = useState<'text_expand' | 'image_reverse'>('text_expand');
@@ -24,7 +25,7 @@ export function IngestPage() {
   }, []);
   const text = prompts.find((item) => item.flowType === 'text_expand');
   const image = prompts.find((item) => item.flowType === 'image_reverse');
-  if (error) return <p className="text-red-600">{error}</p>;
+  if (error) return <InlineAlert type="error">{error}</InlineAlert>;
   if (!text || !image) return <p className="text-sm text-gray-500">正在加载…</p>;
   return <div>
     <h1 className="mb-6 text-2xl font-semibold">智能入库</h1>

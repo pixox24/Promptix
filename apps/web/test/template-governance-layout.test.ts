@@ -33,6 +33,25 @@ test('governance workspace exposes single and explicit-batch deletion requests',
   assert.match(data, /\/api\/admin\/templates\/deletion-requests/);
 });
 
+test('governance inspector exposes deterministic edit, taxonomy confirmation, and publish actions', async () => {
+  const page = await readFile(new URL('../src/pages/admin/TemplateGovernancePage.tsx', import.meta.url), 'utf8');
+  const inspector = await readFile(new URL('../src/components/admin/governance/GovernanceInspector.tsx', import.meta.url), 'utf8');
+  const data = await readFile(new URL('../src/data/templateGovernanceApi.ts', import.meta.url), 'utf8');
+  const admin = await readFile(new URL('../src/pages/AdminPage.tsx', import.meta.url), 'utf8');
+
+  assert.match(inspector, /编辑模板/);
+  assert.match(inspector, /确认分类/);
+  assert.match(inspector, /申请发布/);
+  assert.match(inspector, /\/admin\/templates\/\$\{detail\.template\.id\}/);
+  assert.match(page, /confirmTemplateTaxonomy/);
+  assert.match(page, /requestTemplatePublish/);
+  assert.match(data, /\/taxonomy-confirm/);
+  assert.match(data, /\/publish/);
+  assert.match(admin, /hasUnsavedChanges/);
+  assert.match(admin, /await save\(\)/);
+  assert.match(admin, /有未保存的修改/);
+});
+
 test('governance workspace exposes run feedback, polling, filters and pagination', async () => {
   const page = await readFile(new URL('../src/pages/admin/TemplateGovernancePage.tsx', import.meta.url), 'utf8');
   const runs = await readFile(new URL('../src/hooks/useGovernanceRuns.ts', import.meta.url), 'utf8');
@@ -56,4 +75,12 @@ test('exposes an independent Agent settings entry', async () => {
   assert.match(admin, /Nav to="\/admin\/agent"/);
   assert.match(settings, /结构化文本模型/);
   assert.match(settings, /系统提示词/);
+});
+
+test('template editor cover preview preserves the full uploaded image', async () => {
+  const admin = await readFile(new URL('../src/pages/AdminPage.tsx', import.meta.url), 'utf8');
+  assert.match(
+    admin,
+    /className="mt-4 aspect-\[4\/3\] w-full rounded-lg bg-gray-100 object-contain"/,
+  );
 });

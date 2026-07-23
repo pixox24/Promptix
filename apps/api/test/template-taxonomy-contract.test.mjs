@@ -26,6 +26,19 @@ test('new templates are drafts and publishing has server-side taxonomy gates', a
   assert.match(source, /const templatePatchInput = templateDraftSchema\.partial\(\)\.extend/);
 });
 
+test('admins can deterministically confirm the current taxonomy before publishing', async () => {
+  const source = await readFile(new URL('../src/routes/templates.ts', import.meta.url), 'utf8');
+
+  assert.match(source, /post\('\/:id\/taxonomy-confirm'/);
+  assert.match(source, /eventType,\s*'template\.taxonomy_confirmed'/);
+  assert.match(source, /taxonomyReviewStatus:\s*'reviewed'/);
+  assert.match(source, /taxonomyReviewedBy:\s*c\.get\('admin'\)\.sub/);
+  assert.match(source, /assertConfirmableSemantic\(semantic\)/);
+  assert.match(source, /loadTemplateSemanticViews\(\[existing\]\)/);
+  assert.doesNotMatch(source, /\bsemanticViews\(/);
+  assert.match(source, /updateTemplateWithVersion/);
+});
+
 test('both ingest routes freeze taxonomy snapshots into job input', async () => {
   const source = await readFile(new URL('../src/routes/jobs.ts', import.meta.url), 'utf8');
 

@@ -20,18 +20,25 @@ test('recommendation navigation carries only the opaque request id', () => {
   );
 });
 
-test('similar templates load from the API with a non-attributed static fallback', async () => {
-  const [hook, api] = await Promise.all([
+test('similar templates load from the API without falling back to stale static data', async () => {
+  const [hook, api, detail, studio] = await Promise.all([
     read('hooks/useSimilarTemplates.ts'),
     read('data/templateApi.ts'),
+    read('pages/DetailPage.tsx'),
+    read('components/detail/PromptStudioDetail.tsx'),
   ]);
 
   assert.match(api, /\/similar\?limit=4/);
   assert.match(api, /recommendation-events/);
-  assert.match(hook, /getSimilarTemplates/);
+  assert.doesNotMatch(hook, /getSimilarTemplates/);
+  assert.doesNotMatch(hook, /VITE_SIMILAR_TEMPLATE_STATIC_FALLBACK/);
+  assert.match(hook, /\.catch\([\s\S]*items:\s*\[\]/);
+  assert.match(hook, /\.catch\([\s\S]*unavailable:\s*true/);
   assert.match(hook, /requestId:\s*null/);
   assert.match(hook, /source:\s*'fallback'/);
-  assert.match(hook, /VITE_SIMILAR_TEMPLATE_STATIC_FALLBACK/);
+  assert.doesNotMatch(detail, /getStaticTemplateById/);
+  assert.match(detail, /similarUnavailable=\{similar\.unavailable\}/);
+  assert.match(studio, /相似模板暂不可用/);
 });
 
 test('impressions require half visibility for one second and dedupe replicas', async () => {

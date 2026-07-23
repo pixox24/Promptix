@@ -226,7 +226,7 @@ flowchart TB
 | `repair_pending` | 存在可自动修复的问题 |
 | `disputed` | 主审与反方复核结论不一致 |
 | `quarantined` | 不应公开且当前没有可靠自动修复方案 |
-| `published_observing` | 已上架，处于 7 天观察期 |
+| `published_observing` | 已上架，处于 3 天观察期 |
 | `stable` | 已通过观察期的正常公开模板 |
 | `exposure_limited` | 仍可通过直接链接访问，但不参与首页、相关推荐和精选 |
 | `archived_cooling` | 已下架，处于 30 天冷静期 |
@@ -338,9 +338,9 @@ stateDiagram-v2
 
 | 条件 | 策略结果 |
 | --- | --- |
-| 硬门禁全部通过、总分 `>= 88`、置信度 `>= 0.90` | 单审自动上架 |
-| 总分 `75–87` | 触发反方 Agent |
-| 总分 `>= 88` 但置信度 `< 0.90` | 触发反方 Agent |
+| 硬门禁全部通过、总分 `>= 92`、关键维度均 `>= 85` | 单审自动上架 |
+| 总分 `75–91` | 触发反方 Agent |
+| 总分 `>= 92` 但任一关键维度 `< 85` | 触发反方 Agent，最终仍须满足关键维度门槛 |
 | 总分 `< 75` 且存在可靠修复计划 | 自动返工 |
 | 总分 `< 75` 且不可修复 | 隔离 |
 | 任意阻断级硬门禁失败 | 不发布；按门禁决定返工或隔离 |
@@ -349,7 +349,7 @@ stateDiagram-v2
 
 为避免模型评分波动导致频繁上下架，使用不同进入与退出阈值：
 
-- 上架阈值：88。
+- 上架阈值：92，且每个关键维度至少为 85。
 - 保持公开阈值：75。
 - 限制曝光阈值：低于 75，或出现需要复核的矛盾信号。
 - 下架候选阈值：低于 55，或触发严重硬门禁。
@@ -395,7 +395,7 @@ stateDiagram-v2
 
 ### 9.3 必须二审的条件
 
-- 新模板总分处于 75–87。
+- 新模板总分处于 75–91。
 - 评分与置信度矛盾。
 - 任意自动下架动作。
 - 任意进入回收站动作。
@@ -701,14 +701,14 @@ type LifecycleRules = {
     visionModelId: string | null;
   };
   thresholds: {
-    publishScore: 88;
+    publishScore: 92;
     maintainScore: 75;
     archiveCandidateScore: 55;
-    minimumPublishConfidence: 0.9;
+    minimumCriticalDimensionScore: 85;
   };
   review: {
     counterReviewMinScore: 75;
-    counterReviewMaxScore: 87;
+    counterReviewMaxScore: 91;
     alwaysReviewActions: ['archive', 'recycle'];
     targetReviewRateMin: 0.15;
     targetReviewRateMax: 0.30;
@@ -717,7 +717,7 @@ type LifecycleRules = {
     maximumAttempts: 2;
   };
   observation: {
-    publishObservationDays: 7;
+    publishObservationDays: 3;
     archiveCoolingDays: 30;
     recycleRetentionDays: 60;
   };
@@ -752,7 +752,7 @@ type LifecycleRules = {
 9. 若可修复，生成返工 Proposal，应用后创建新版本并重新进入第 3 步。
 10. 若不合格且不可修复，进入 `quarantined`。
 11. 执行器消费许可，创建版本和审计，将状态投影为 `published`。
-12. 生命周期进入 `published_observing`，设置 7 天观察任务。
+12. 生命周期进入 `published_observing`，设置 3 天观察任务。
 
 ### 13.2 观察期
 
@@ -947,7 +947,7 @@ WHERE id = :templateId
 | `template_lifecycle_counter_review` | 按需反方复核 |
 | `template_lifecycle_repair` | 执行受限自动返工 |
 | `template_lifecycle_execute` | 消费许可并执行 ChangeSet |
-| `template_lifecycle_observe` | 处理 7 天观察期 |
+| `template_lifecycle_observe` | 处理 3 天观察期 |
 | `template_lifecycle_cooling_scan` | 检查 30 天冷静期 |
 | `template_lifecycle_policy_replay` | 规则时光机和金标回放 |
 

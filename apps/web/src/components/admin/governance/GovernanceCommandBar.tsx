@@ -1,6 +1,7 @@
 import { Bot, Send, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { GovernanceRunSummary } from '../../../types/templateGovernance';
+import { InlineAlert } from '../../feedback/InlineAlert';
 
 export function GovernanceCommandBar({
   count,
@@ -50,6 +51,6 @@ export function GovernanceCommandBar({
       <span>范围：{selectionLabel || `当前筛选结果，共约 ${count} 个模板`}。系统先生成计划，高风险操作仍需审批。</span>
       <button onClick={() => setPreview(false)} title="修改指令" className="ml-3 text-violet-700"><X size={15}/></button>
     </div>}
-    {error && <p className="mt-2 text-xs text-red-700" role="alert">{error}</p>}
+    {error && <InlineAlert type="error" className="mt-2 text-xs">{error}</InlineAlert>}
   </section>;
 }

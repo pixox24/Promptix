@@ -1,32 +1,10 @@
 import { useEffect, useState } from 'react';
 import { fetchSimilarTemplates } from '../data/templateApi';
-import { getSimilarTemplates } from '../data/templates';
 import type { PromptTemplate } from '../types/prompt';
 import type {
   SimilarTemplateViewItem,
   SimilarTemplateViewResult,
 } from '../types/recommendation';
-
-const STATIC_FALLBACK_ENABLED =
-  import.meta.env.VITE_SIMILAR_TEMPLATE_STATIC_FALLBACK !== 'false';
-
-function fallbackResult(template: PromptTemplate): SimilarTemplateViewResult {
-  return {
-    items: STATIC_FALLBACK_ENABLED
-      ? getSimilarTemplates(template, 4).map((candidate, index) => ({
-          template: candidate,
-          score: 0,
-          position: index + 1,
-          reasonCodes: ['popular'],
-          reasonLabel: '你可能也喜欢',
-        }))
-      : [],
-    requestId: null,
-    algorithmVersion: null,
-    source: 'fallback',
-    loading: false,
-  };
-}
 
 export function useSimilarTemplates(template: PromptTemplate | undefined) {
   const [result, setResult] = useState<SimilarTemplateViewResult>({
@@ -35,6 +13,7 @@ export function useSimilarTemplates(template: PromptTemplate | undefined) {
     algorithmVersion: null,
     source: 'fallback',
     loading: Boolean(template),
+    unavailable: false,
   });
 
   useEffect(() => {
@@ -45,6 +24,7 @@ export function useSimilarTemplates(template: PromptTemplate | undefined) {
         algorithmVersion: null,
         source: 'fallback',
         loading: false,
+        unavailable: false,
       });
       return;
     }
@@ -60,12 +40,20 @@ export function useSimilarTemplates(template: PromptTemplate | undefined) {
           algorithmVersion: response.algorithmVersion,
           source: 'server',
           loading: false,
+          unavailable: false,
         });
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
-        console.warn('similar template request failed; using fallback', error);
-        setResult(fallbackResult(template));
+        console.warn('similar template request failed', error);
+        setResult({
+          items: [],
+          requestId: null,
+          algorithmVersion: null,
+          source: 'fallback',
+          loading: false,
+          unavailable: true,
+        });
       });
     return () => controller.abort();
   }, [template]);

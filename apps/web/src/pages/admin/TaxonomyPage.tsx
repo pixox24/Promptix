@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import type { TaxonomyDimension } from '@promptix/shared';
 import { api } from '../../lib/api';
 import { fetchTaxonomy, type TaxonomyTerm } from '../../data/taxonomyApi';
+import { InlineAlert } from '../../components/feedback/InlineAlert';
+import { useToast } from '../../context/ToastContext';
 
 const dimensions: Array<{ id: TaxonomyDimension; label: string }> = [
   { id: 'output_type', label: '产物类型' }, { id: 'scenario', label: '使用场景' },
@@ -10,6 +12,7 @@ const dimensions: Array<{ id: TaxonomyDimension; label: string }> = [
 const empty = (dimension: TaxonomyDimension) => ({ id: '', dimension, slug: '', label: '', description: '', aliases: '', sortOrder: 0 });
 
 export function TaxonomyPage() {
+  const { toast } = useToast();
   const [dimension, setDimension] = useState<TaxonomyDimension>('output_type');
   const [items, setItems] = useState<TaxonomyTerm[]>([]);
   const [form, setForm] = useState(empty('output_type'));
@@ -25,11 +28,16 @@ export function TaxonomyPage() {
       else await api('/api/admin/taxonomy', { method: 'POST', body: JSON.stringify({ ...payload, dimension, slug: form.slug }) });
       setForm(empty(dimension));
       await load();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '保存失败'); }
+      toast(form.id ? '分类词条已更新' : '分类词条已创建', 'success');
+    } catch (reason) { toast(reason instanceof Error ? reason.message : '保存失败', 'error'); }
   }
   async function toggle(item: TaxonomyTerm) {
-    try { await api(`/api/admin/taxonomy/${item.id}/${item.enabled ? 'disable' : 'enable'}`, { method: 'POST' }); await load(); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : '状态更新失败'); }
+    try {
+      await api(`/api/admin/taxonomy/${item.id}/${item.enabled ? 'disable' : 'enable'}`, { method: 'POST' });
+      await load();
+      toast(`分类词条已${item.enabled ? '停用' : '启用'}`, 'success');
+    }
+    catch (reason) { toast(reason instanceof Error ? reason.message : '状态更新失败', 'error'); }
   }
 
   const field = 'rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-violet-500';
@@ -44,7 +52,7 @@ export function TaxonomyPage() {
       <div className="flex gap-2"><button className="flex-1 rounded-lg bg-violet-600 px-4 py-2 text-sm text-white" onClick={save}>{form.id ? '保存修改' : '新建'}</button>{form.id && <button className="rounded-lg border px-3 text-sm" onClick={() => setForm(empty(dimension))}>取消</button>}</div>
       <input className={`${field} md:col-span-2 lg:col-span-5`} placeholder="说明" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
     </div>
-    {error && <p className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+    {error && <InlineAlert type="error" className="mb-4">{error}</InlineAlert>}
     <div className="overflow-hidden rounded-xl border bg-white"><table className="w-full text-left text-sm"><thead className="bg-gray-50 text-xs text-gray-500"><tr><th className="p-3">名称</th><th>slug</th><th>别名</th><th>引用</th><th>状态</th><th className="p-3 text-right">操作</th></tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t"><td className="p-3 font-medium">{item.label}</td><td className="font-mono text-xs">{item.slug}</td><td className="max-w-xs truncate text-xs text-gray-500">{item.aliases?.join('、') || '—'}</td><td>{item.referenceCount ?? 0}</td><td>{item.enabled ? '启用' : '停用'}</td><td className="p-3 text-right"><button className="mr-3 text-violet-600" onClick={() => setForm({ id: item.id, dimension, slug: item.slug, label: item.label, description: item.description, aliases: item.aliases?.join(', ') ?? '', sortOrder: item.sortOrder })}>编辑</button><button className={item.enabled ? 'text-amber-600' : 'text-emerald-600'} onClick={() => toggle(item)}>{item.enabled ? '停用' : '启用'}</button></td></tr>)}</tbody></table>{!items.length && <p className="p-10 text-center text-sm text-gray-400">暂无词条</p>}</div>
   </div>;
 }

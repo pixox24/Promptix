@@ -10,6 +10,7 @@ export type SimilarTemplateViewResult = {
   algorithmVersion: 'similar-v1' | null;
   source: 'server' | 'fallback';
   loading: boolean;
+  unavailable: boolean;
 };
 
 export type RecommendationCardMeta = {

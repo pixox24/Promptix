@@ -14,6 +14,8 @@ import type { AdminModel } from "../types/adminModels";
 import { api, ApiError } from "../lib/api";
 import { fetchTaxonomy, type TaxonomyTerm } from "../data/taxonomyApi";
 import { useConfirmDialog } from "../context/ConfirmDialogContext";
+import { useToast } from "../context/ToastContext";
+import { InlineAlert } from "../components/feedback/InlineAlert";
 const ProviderModelsPage = lazy(() => import('./admin/ProviderModelsPage').then((module) => ({ default: module.ProviderModelsPage })));
 const IngestPage = lazy(() => import('./admin/IngestPage').then((module) => ({ default: module.IngestPage })));
 const TaxonomyPage = lazy(() => import('./admin/TaxonomyPage').then((module) => ({ default: module.TaxonomyPage })));
@@ -86,6 +88,8 @@ const blank = (): DraftForm => ({
   isFeatured: false,
   featuredOrder: 0,
 });
+const editorFingerprint = (form: DraftForm, taxonomyConfirmed: boolean) =>
+  JSON.stringify({ form, taxonomyConfirmed });
 const field =
   "w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100";
 const button =
@@ -484,12 +488,14 @@ function TemplateEditor() {
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const { toast } = useToast();
   const [form, setForm] = useState(blank());
   const [existing, setExisting] = useState<Template | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [taxonomyTerms, setTaxonomyTerms] = useState<TaxonomyTerm[]>([]);
   const [taxonomyConfirmed, setTaxonomyConfirmed] = useState(false);
+  const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
   const [genJob, setGenJob] = useState<Job | null>((location.state as { coverJob?: Job } | null)?.coverJob ?? null);
   useEffect(() => {
     fetchTaxonomy().then(setTaxonomyTerms).catch((error) => setMessage(error instanceof Error ? error.message : "分类词库加载失败"));
@@ -500,14 +506,17 @@ function TemplateEditor() {
         .then((t) => {
           setExisting(t);
           if (t.coverJob) setGenJob(t.coverJob);
-          setForm({
+          const nextForm: DraftForm = {
             ...blank(),
             ...t,
             semantic: t.semantic ?? blank().semantic,
             variables: t.variables ?? [],
             negativePrompt: t.negativePrompt ?? "",
-          });
-          setTaxonomyConfirmed(t.taxonomyReviewStatus === "reviewed");
+          };
+          const nextTaxonomyConfirmed = t.taxonomyReviewStatus === "reviewed";
+          setForm(nextForm);
+          setTaxonomyConfirmed(nextTaxonomyConfirmed);
+          setSavedFingerprint(editorFingerprint(nextForm, nextTaxonomyConfirmed));
         })
         .catch((e) => setMessage(e.message));
   }, [id]);
@@ -529,6 +538,8 @@ function TemplateEditor() {
   }, [genJob?.id, genJob?.status]);
   const set = (key: string, value: unknown) =>
     setForm((f) => ({ ...f, [key]: value }));
+  const hasUnsavedChanges = savedFingerprint !== null
+    && savedFingerprint !== editorFingerprint(form, taxonomyConfirmed);
   async function save() {
     setBusy(true);
     setMessage("");
@@ -541,12 +552,19 @@ function TemplateEditor() {
         { method: id ? "PATCH" : "POST", body: JSON.stringify(payload) },
       );
       setExisting(t);
-      setMessage("已保存");
+      setSavedFingerprint(editorFingerprint(form, taxonomyConfirmed));
+      setMessage("");
+      toast("模板已保存", "success");
       if (!id) navigate(`/admin/templates/${t.id}`, { replace: true });
+      return t;
     } catch (e) {
-      setMessage(e instanceof ApiError && e.code === "VERSION_CONFLICT"
-        ? "服务器上的模板已被其他操作更新。你的本地编辑仍保留，请刷新页面核对最新版本后再保存。"
-        : e instanceof Error ? e.message : "保存失败");
+      if (e instanceof ApiError && e.code === "VERSION_CONFLICT") {
+        setMessage("服务器上的模板已被其他操作更新。你的本地编辑仍保留，请刷新页面核对最新版本后再保存。");
+      } else {
+        setMessage("");
+        toast(e instanceof Error ? e.message : "保存失败", "error");
+      }
+      return null;
     } finally {
       setBusy(false);
     }
@@ -566,21 +584,32 @@ function TemplateEditor() {
         body,
       });
       setExisting(t);
-      setMessage("封面已上传");
+      setMessage("");
+      toast("封面已上传", "success");
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "上传失败");
+      toast(e instanceof Error ? e.message : "上传失败", "error");
     }
   }
   async function publish() {
     if (!id) return;
+    let current = existing;
+    if (hasUnsavedChanges) {
+      current = await save();
+      if (!current) return;
+    }
+    if (!current) return;
+    setBusy(true);
     try {
       await api<{ changeSetId: string; status: "awaiting_approval" }>(`/api/admin/templates/${id}/publish`, {
         method: "POST",
-        body: JSON.stringify({ expectedVersion: existing?.currentVersion, idempotencyKey: crypto.randomUUID() }),
+        body: JSON.stringify({ expectedVersion: current.currentVersion, idempotencyKey: crypto.randomUUID() }),
       });
-      setMessage("发布请求已提交审批");
+      setMessage("");
+      toast("发布请求已提交审批", "success");
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "发布失败");
+      toast(e instanceof Error ? e.message : "发布失败", "error");
+    } finally {
+      setBusy(false);
     }
   }
   async function generate() {
@@ -594,10 +623,10 @@ function TemplateEditor() {
           input: { n: 1, source: "template_cover" },
         }),
       });
-      setMessage("生图任务已提交");
+      toast("生图任务已提交", "success");
       poll(x.jobId);
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "提交失败");
+      toast(e instanceof Error ? e.message : "提交失败", "error");
     }
   }
   function poll(jobId: string) {
@@ -618,9 +647,9 @@ function TemplateEditor() {
         body: JSON.stringify({ templateId: id, imageIndex: 0 }),
       });
       setExisting(t);
-      setMessage("生成图已自动设为封面");
+      toast("生成图已自动设为封面", "success");
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "生成图设为封面失败");
+      toast(e instanceof Error ? e.message : "生成图设为封面失败", "error");
     }
   }
   async function setGeneratedCover() {
@@ -674,7 +703,8 @@ function TemplateEditor() {
       <Header
         title={id ? "编辑模板" : "新建模板"}
         action={
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            {hasUnsavedChanges && <span className="text-xs font-medium text-amber-600">有未保存的修改</span>}
             <Link
               className="rounded-lg border px-4 py-2 text-sm"
               to="/admin/templates"
@@ -688,6 +718,7 @@ function TemplateEditor() {
               <button
                 className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white"
                 onClick={publish}
+                disabled={busy}
               >
                 发布
               </button>
@@ -695,7 +726,7 @@ function TemplateEditor() {
           </div>
         }
       />
-      {message && <Notice text={message} />}
+      {message && <InlineAlert type="error" className="mb-5">{message}</InlineAlert>}
       {coverAudit}
       <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
         <section className="space-y-5 rounded-xl border bg-white p-5">
@@ -733,7 +764,7 @@ function TemplateEditor() {
           <label className="text-sm">工作模式<select className={`${field} mt-1`} value={form.semantic.workflowType} onChange={(event) => setSemantic({ workflowType: event.target.value as "generate" | "edit" })}><option value="generate">生成图片</option><option value="edit">编辑图片</option></select></label>
           {([['scenario', 'scenarios', '使用场景'], ['style', 'styles', '视觉风格'], ['subject', 'subjects', '画面主体']] as const).map(([dimension, key, label]) => <fieldset key={dimension}><legend className="mb-2 text-sm font-medium">{label}</legend><div className="flex flex-wrap gap-2">{termsFor(dimension).map((term) => { const active = form.semantic[key].includes(term.slug); return <button type="button" key={term.id} aria-pressed={active} onClick={() => toggleSemantic(key, term.slug)} className={`rounded-full border px-3 py-1.5 text-xs ${active ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-gray-200 text-gray-600'}`}>{term.label}</button>; })}</div></fieldset>)}
           <Input label="自由标签（逗号分隔）" value={form.semantic.tags.join(",")} onChange={(value) => setSemantic({ tags: value.split(",").map((item) => item.trim()).filter(Boolean) })} />
-          {form.semantic.unmappedTerms.length > 0 && <Notice text={`还有 ${form.semantic.unmappedTerms.length} 个待处理分类词，请在智能入库校对页处理后再确认。`} />}
+          {form.semantic.unmappedTerms.length > 0 && <InlineAlert type="warning">还有 {form.semantic.unmappedTerms.length} 个待处理分类词，请在智能入库校对页处理后再确认。</InlineAlert>}
           <label className="flex items-start gap-2 rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm"><input className="mt-0.5" type="checkbox" checked={taxonomyConfirmed} onChange={(event) => setTaxonomyConfirmed(event.target.checked)} /><span>我已人工确认产物类型、使用场景、风格和画面主体</span></label>
           <div className="flex items-center justify-between">
             <h2 className="font-semibold">变量</h2>
@@ -811,7 +842,7 @@ function TemplateEditor() {
             <h2 className="font-semibold">封面与状态</h2>
             {existing?.coverUrl ? (
               <img
-                className="mt-4 aspect-[4/3] w-full rounded-lg object-cover"
+                className="mt-4 aspect-[4/3] w-full rounded-lg bg-gray-100 object-contain"
                 src={existing.coverUrl}
               />
             ) : (
@@ -908,6 +939,7 @@ export function LegacyIngest() {
   const [file, setFile] = useState<File>();
   const [job, setJob] = useState<Job>();
   const [message, setMessage] = useState("");
+  const { toast } = useToast();
   const [modelItems, setModelItems] = useState<AdminModel[]>([]);
   const [modelId, setModelId] = useState("");
   const navigate = useNavigate();
@@ -952,7 +984,7 @@ export function LegacyIngest() {
       }
       poll(x.jobId);
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "提交失败");
+      toast(e instanceof Error ? e.message : "提交失败", "error");
     }
   }
   function poll(id: string) {
@@ -970,9 +1002,10 @@ export function LegacyIngest() {
         method: "POST",
         body: JSON.stringify({ ...(job.output as object), source: job.type }),
       });
+      toast("模板草稿已保存", "success");
       navigate(`/admin/templates/${t.id}`);
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "保存失败");
+      toast(e instanceof Error ? e.message : "保存失败", "error");
     }
   }
   return (
@@ -1030,7 +1063,7 @@ export function LegacyIngest() {
           >
             提交异步任务
           </button>
-          {message && <p className="mt-3 text-sm text-red-600">{message}</p>}
+          {message && <InlineAlert type="error" className="mt-3">{message}</InlineAlert>}
         </section>
         <section className="rounded-xl border bg-white p-5">
           <h2 className="font-semibold">任务结果</h2>
@@ -1169,13 +1202,7 @@ function Area({
   );
 }
 function Notice({ text }: { text: string }) {
-  return (
-    <div
-      className={`mb-4 rounded-lg border px-4 py-3 text-sm ${text.includes("成功") || text.includes("已") ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-amber-200 bg-amber-50 text-amber-800"}`}
-    >
-      {text}
-    </div>
-  );
+  return <InlineAlert type="error" className="mb-4">{text}</InlineAlert>;
 }
 function Status({ value }: { value: string }) {
   const good = ["published", "succeeded", "enabled", "default"].includes(value),

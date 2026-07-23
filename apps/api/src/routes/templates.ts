@@ -574,6 +574,92 @@ adminTemplateRoutes.delete('/:id', async (c) => {
   return ok(c, await createLifecycleApproval({ template: row, action: 'delete', actorId: c.get('admin').sub, idempotencyKey, semantic: semantics.get(row.id)! }), 202);
 });
 
+adminTemplateRoutes.post('/:id/taxonomy-confirm', async (c) => {
+  const action = versionedActionInput.safeParse(await c.req.json().catch(() => null));
+  if (!action.success) return fail(c, 'VALIDATION_ERROR', 'expectedVersion and idempotencyKey are required', 400);
+  const templateId = c.req.param('id');
+  const [existing] = await getDb().select().from(promptTemplates)
+    .where(and(eq(promptTemplates.id, templateId), isNull(promptTemplates.deletedAt))).limit(1);
+  if (!existing) return fail(c, 'NOT_FOUND', 'Template not found', 404);
+  const semantics = await loadTemplateSemanticViews([existing]);
+  const semantic = semantics.get(existing.id);
+  if (!semantic) return fail(c, 'TAXONOMY_REVIEW_REQUIRED', '模板分类不可用', 409);
+  try {
+    assertConfirmableSemantic(semantic);
+  } catch (error) {
+    if (error instanceof TaxonomyValidationError) return fail(c, error.code, error.message, 409);
+    throw error;
+  }
+  const taxonomyAssignments = (await taxonomySnapshotViews([existing])).get(existing.id) ?? [];
+  const mutation = await getDb().transaction(async (tx) => updateTemplateWithVersion<typeof promptTemplates.$inferSelect>({
+    findIdempotentResult: async (key) => {
+      const [event] = await tx.select({ payload: governanceAuditEvents.payload })
+        .from(governanceAuditEvents)
+        .where(and(
+          eq(governanceAuditEvents.eventType, 'template.taxonomy_confirmed'),
+          eq(governanceAuditEvents.targetId, templateId),
+          sql`${governanceAuditEvents.payload}->>'idempotencyKey' = ${key}`,
+        )).limit(1);
+      const payload = event?.payload as { result?: typeof promptTemplates.$inferSelect } | undefined;
+      return payload?.result ?? null;
+    },
+    loadTemplate: async (id) => {
+      const [current] = await tx.select().from(promptTemplates)
+        .where(and(eq(promptTemplates.id, id), isNull(promptTemplates.deletedAt))).limit(1);
+      return current ?? null;
+    },
+    updateIfVersion: async (id, version, patch) => {
+      const [updated] = await tx.update(promptTemplates).set({
+        ...patch,
+        currentVersion: sql`${promptTemplates.currentVersion} + 1`,
+        updatedAt: new Date(),
+      }).where(and(
+        eq(promptTemplates.id, id),
+        eq(promptTemplates.currentVersion, version),
+        isNull(promptTemplates.deletedAt),
+      )).returning();
+      return updated ?? null;
+    },
+    insertVersion: async (version) => {
+      await tx.insert(templateVersions).values({
+        templateId: version.templateId,
+        version: version.version,
+        snapshot: version.snapshot,
+        source: version.actor.source,
+        actorId: version.actor.actorId,
+      });
+    },
+    recordIdempotentResult: async (key, result) => {
+      await tx.insert(governanceAuditEvents).values({
+        actorType: 'admin',
+        actorId: c.get('admin').sub,
+        eventType: 'template.taxonomy_confirmed',
+        targetType: 'template',
+        targetId: result.id,
+        payload: { idempotencyKey: key, result },
+      });
+    },
+  }, {
+    id: templateId,
+    expectedVersion: action.data.expectedVersion,
+    idempotencyKey: action.data.idempotencyKey,
+    patch: {
+      taxonomyReviewStatus: 'reviewed',
+      taxonomyReviewedAt: new Date(),
+      taxonomyReviewedBy: c.get('admin').sub,
+    },
+    semantic,
+    taxonomyAssignments,
+    actor: { source: 'admin', actorId: c.get('admin').sub },
+  }));
+  if (!mutation.ok) {
+    return mutation.code === 'NOT_FOUND'
+      ? fail(c, 'NOT_FOUND', 'Template not found', 404)
+      : fail(c, 'VERSION_CONFLICT', `Template changed on the server (version ${mutation.currentVersion ?? 'unknown'})`, 409);
+  }
+  return ok(c, { ...mutation.template, semantic });
+});
+
 adminTemplateRoutes.post('/:id/publish', async (c) => {
   const action = versionedActionInput.safeParse(await c.req.json().catch(() => null));
   if (!action.success) return fail(c, 'VALIDATION_ERROR', 'expectedVersion and idempotencyKey are required', 400);

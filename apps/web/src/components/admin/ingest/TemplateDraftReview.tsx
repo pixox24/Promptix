@@ -9,6 +9,8 @@ import {
 } from '@promptix/shared';
 import { api } from '../../../lib/api';
 import { fetchTaxonomy, type TaxonomyTerm } from '../../../data/taxonomyApi';
+import { InlineAlert } from '../../feedback/InlineAlert';
+import { useToast } from '../../../context/ToastContext';
 
 const splitValues = (value: string) => value.split(',').map((item) => item.trim()).filter(Boolean);
 
@@ -46,9 +48,10 @@ export function TemplateDraftReview({ draft, jobId, source, qualityIssues = [], 
 }) {
   const [form, setForm] = useState<TemplateDraft>(() => templateDraftSchema.parse(draft));
   const [terms, setTerms] = useState<TaxonomyTerm[]>([]);
-  const [confirmed, setConfirmed] = useState(false);
+  const [confirmed, setConfirmed] = useState(true);
   const [error, setError] = useState('');
   const navigate = useNavigate();
+  const { toast } = useToast();
 
   const reloadTerms = () => fetchTaxonomy().then(setTerms).catch((reason) => setError(reason instanceof Error ? reason.message : '分类词库加载失败'));
   useEffect(() => { void reloadTerms(); }, []);
@@ -90,6 +93,7 @@ export function TemplateDraftReview({ draft, jobId, source, qualityIssues = [], 
         body: JSON.stringify({ ...parsed.data, taxonomyConfirmed: confirmed, source, sourceMeta: { jobId }, autoCover: source === 'image_reverse', coverMode: source === 'image_reverse' ? 'auto_if_missing' : 'disabled' }),
       });
       onSaved?.();
+      toast('模板草稿已保存', 'success');
       navigate(`/admin/templates/${template.id}`, { state: { coverJob: template.coverJob } });
     } catch (reason) { setError(reason instanceof Error ? reason.message : '保存失败'); }
   }
@@ -122,7 +126,7 @@ export function TemplateDraftReview({ draft, jobId, source, qualityIssues = [], 
     <label className="block text-sm">Prompt 骨架<textarea className="mt-1 min-h-32 w-full rounded border p-2 font-mono text-xs" value={form.promptTemplate} onChange={(event) => set('promptTemplate', event.target.value)} /></label>
     <label className="block text-sm">负面 Prompt<textarea className="mt-1 min-h-20 w-full rounded border p-2" value={form.negativePrompt ?? ''} onChange={(event) => set('negativePrompt', event.target.value)} /></label>
     <label className="flex items-start gap-2 rounded border border-violet-200 bg-violet-50 p-3 text-sm"><input className="mt-0.5" type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>我已检查并确认产物类型、使用场景、风格和画面主体。后续修改这些字段会重新变为待确认。</span></label>
-    {error && <p className="text-sm text-red-600">{error}</p>}
+    {error && <InlineAlert type="error">{error}</InlineAlert>}
     <button type="button" className="rounded-md bg-violet-600 px-4 py-2 text-sm text-white" onClick={save}>保存为草稿</button>
   </div>;
 }

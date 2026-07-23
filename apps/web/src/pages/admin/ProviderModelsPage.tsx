@@ -74,7 +74,6 @@ export function ProviderModelsPage() {
   const [models, setModels] = useState<AdminModel[]>([]);
   const [providerForm, setProviderForm] = useState<ProviderForm>(blankProvider);
   const [modelForm, setModelForm] = useState<ModelForm>(blankModel);
-  const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [testProvider, setTestProvider] = useState<ProviderConnection | null>(null);
   const [selectedTestModelId, setSelectedTestModelId] = useState('');
@@ -106,9 +105,8 @@ export function ProviderModelsPage() {
   }, []);
 
   useEffect(() => {
-    load().catch((error) => setMessage(error instanceof Error ? error.message : '配置加载失败'));
-  }, [load]);
-  useEffect(()=>{if(!message)return;const error=/失败|错误|不能|未配置|不存在/.test(message);toast(message,error?'error':message.includes('未')?'warning':'success');setMessage('')},[message,toast]);
+    load().catch((error) => toast(error instanceof Error ? error.message : '配置加载失败', 'error'));
+  }, [load, toast]);
 
   useEffect(() => {
     const dialog = testDialogRef.current;
@@ -152,7 +150,7 @@ export function ProviderModelsPage() {
     const imageModels=models.filter((model)=>model.providerId===provider.id&&model.providerEnabled&&model.enabled&&model.capabilities.includes('image'));
     const mode=eligibleModels.length?'text':'image'; const candidates=mode==='text'?eligibleModels:imageModels;
     if (candidates.length === 0) {
-      setMessage('请先添加并启用可测试的文本或图片 Model');
+      toast('请先添加并启用可测试的文本或图片 Model', 'warning');
       return;
     }
     setTestMode(mode);
@@ -207,14 +205,14 @@ export function ProviderModelsPage() {
 
   async function discoverModels() {
     if (!modelForm.providerId) return;
-    setDiscovering(true); setMessage('');
+    setDiscovering(true);
     try {
       const rows = await api<Array<{id:string;name:string;capabilities:ModelCapability[]}>>(`/api/admin/providers/${modelForm.providerId}/models`);
       setDiscoveredModels(rows);
-      if (!rows.length) setMessage('厂商未返回可用模型，请手动输入 Model ID');
+      if (!rows.length) toast('厂商未返回可用模型，请手动输入 Model ID', 'warning');
     } catch (error) {
       setDiscoveredModels([]);
-      setMessage(error instanceof Error ? error.message : '模型拉取失败，可手动输入 Model ID');
+      toast(error instanceof Error ? error.message : '模型拉取失败，可手动输入 Model ID', 'error');
     } finally { setDiscovering(false); }
   }
 
@@ -238,7 +236,7 @@ export function ProviderModelsPage() {
       }, null, 2),
       isDefaultText: true,
     });
-    setMessage('已载入 DeepSeek 连接和模型预设；先保存 Provider，再保存 Model');
+    toast('已载入 DeepSeek 连接和模型预设；先保存 Provider，再保存 Model', 'info');
   }
 
   function loadAsyncImagePreset() {
@@ -267,15 +265,14 @@ export function ProviderModelsPage() {
       }, null, 2),
       isDefaultImage: true,
     });
-    setMessage('已载入 65535 连接和模型预设；先保存 Provider，再保存 Model');
+    toast('已载入 65535 连接和模型预设；先保存 Provider，再保存 Model', 'info');
   }
 
   async function saveProvider() {
     setBusy(true);
-    setMessage('');
     try {
       if (providers.some((provider) => providerKey(provider) === providerKey(providerForm))) {
-        setMessage('相同的 Provider 连接已经存在，未重复新增；已选中已有 Provider。');
+        toast('相同的 Provider 连接已经存在，未重复新增；已选中已有 Provider。', 'info');
         const existing = providers.find((provider) => providerKey(provider) === providerKey(providerForm));
         if (existing) setModelForm((current) => ({ ...current, providerId: existing.id }));
         return;
@@ -289,10 +286,10 @@ export function ProviderModelsPage() {
       });
       setModelForm((current) => ({ ...current, providerId: created.id }));
       setEditingProviderId(null);
-      setMessage(`Provider ${created.name} 已保存；现在可以保存 Model`);
+      toast(`Provider ${created.name} 已保存；现在可以保存 Model`, 'success');
       await load();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Provider 保存失败');
+      toast(error instanceof Error ? error.message : 'Provider 保存失败', 'error');
     } finally {
       setBusy(false);
     }
@@ -300,7 +297,6 @@ export function ProviderModelsPage() {
 
   async function saveModel() {
     setBusy(true);
-    setMessage('');
     try {
       const defaults = JSON.parse(modelForm.defaultsText) as unknown;
       if (typeof defaults !== 'object' || defaults === null || Array.isArray(defaults)) {
@@ -315,16 +311,16 @@ export function ProviderModelsPage() {
         }),
       });
       setEditingModelId(null);
-      setMessage('Model 已保存');
+      toast('Model 已保存', 'success');
       setModelForm((current) => ({ ...blankModel(), providerId: current.providerId }));
       await load();
     } catch (error) {
       const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
       if (code === 'MODEL_ALREADY_EXISTS') {
         const existing = models.find((item) => item.providerId === modelForm.providerId && item.modelId.trim().toLowerCase() === modelForm.modelId.trim().toLowerCase());
-        if (existing) { editModel(existing); setMessage(`已找到已有 Model「${existing.name}」，已加载到编辑表单`); }
-        else setMessage('该 Provider 已存在相同 Model ID，请编辑已有配置');
-      } else setMessage(error instanceof Error ? error.message : 'Model 保存失败');
+        if (existing) { editModel(existing); toast(`已找到已有 Model「${existing.name}」，已加载到编辑表单`, 'info'); }
+        else toast('该 Provider 已存在相同 Model ID，请编辑已有配置', 'warning');
+      } else toast(error instanceof Error ? error.message : 'Model 保存失败', 'error');
     } finally {
       setBusy(false);
     }
@@ -349,8 +345,9 @@ export function ProviderModelsPage() {
         body: JSON.stringify({ enabled }),
       });
       await load();
+      toast(`Model ${model.name} 已${enabled ? '恢复' : '归档'}`, 'success');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Model 状态更新失败');
+      toast(error instanceof Error ? error.message : 'Model 状态更新失败', 'error');
     }
   }
 
@@ -359,27 +356,28 @@ export function ProviderModelsPage() {
     try {
       await api(`/api/admin/models/${model.id}`, { method: 'DELETE' });
       await load();
+      toast(`Model ${model.name} 已永久删除`, 'success');
     } catch (error) {
       const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
-      setMessage(code === 'DEFAULT_MODEL_DELETE_FORBIDDEN'
+      toast(code === 'DEFAULT_MODEL_DELETE_FORBIDDEN'
         ? '该模型仍是默认模型，请先为对应角色设置其他默认模型。'
-        : error instanceof Error ? error.message : 'Model 永久删除失败');
+        : error instanceof Error ? error.message : 'Model 永久删除失败', 'error');
     }
   }
 
   async function removeProvider(provider: ProviderConnection) {
     const ownedModels = models.filter((model) => model.providerId === provider.id);
     if (ownedModels.length > 0) {
-      setMessage(`Provider「${provider.name}」仍包含 ${ownedModels.length} 个 Model，请先处理这些 Model。`);
+      toast(`Provider「${provider.name}」仍包含 ${ownedModels.length} 个 Model，请先处理这些 Model。`, 'warning');
       return;
     }
     if (!await confirm({title:'删除未完成的 Provider？',description:`${provider.name} 尚未配置 Model。删除后连接配置无法恢复。`,confirmLabel:'删除 Provider',danger:true})) return;
     try {
       await api(`/api/admin/providers/${provider.id}`, { method: 'DELETE' });
-      setMessage(`Provider ${provider.name} 已删除`);
+      toast(`Provider ${provider.name} 已删除`, 'success');
       await load();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Provider 删除失败');
+      toast(error instanceof Error ? error.message : 'Provider 删除失败', 'error');
     }
   }
 
@@ -395,9 +393,9 @@ export function ProviderModelsPage() {
         body: JSON.stringify(patch),
       });
       await load();
-      setMessage(`${model.name} 已设为默认${role}`);
+      toast(`${model.name} 已设为默认${role}`, 'success');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '默认用途更新失败');
+      toast(error instanceof Error ? error.message : '默认用途更新失败', 'error');
     }
   }
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ClipboardPaste, Upload } from 'lucide-react';
+import { InlineAlert } from '../../feedback/InlineAlert';
 import { api } from '../../../lib/api';
 import { useIngestJob } from '../../../hooks/useIngestJob';
 import { eligibleStructureModels, eligibleVisionModels, ingestFlowStatus, parseIngestDraft } from '../../../lib/ingest-workflow';
@@ -131,14 +132,14 @@ export function ImageReverseFlow({ models, prompt, onModelsUpdated, onStatusChan
       <div className="mt-3 flex items-center gap-3"><button type="button" className="inline-flex items-center gap-2 rounded-lg border border-violet-200 px-3 py-2 text-sm text-violet-700 hover:bg-violet-50 disabled:opacity-50" onClick={pasteFromClipboard} disabled={readingClipboard || status === 'queued' || status === 'running'}><ClipboardPaste size={16}/>{readingClipboard ? '读取中…' : '从剪贴板粘贴'}</button><span className="text-xs text-gray-400">也可先点击上传区再直接粘贴</span></div>
       {file && <div className="mt-3 flex items-center justify-between text-xs text-gray-500"><span className="truncate">{file.name} · {(file.size / 1024 / 1024).toFixed(2)} MB</span><button type="button" className="text-red-600" onClick={() => setFile(undefined)}>移除图片</button></div>}
       <button type="button" className="mt-4 rounded-lg bg-violet-600 px-4 py-2 text-sm text-white disabled:opacity-50" disabled={!file || !structureModelId || !visionModelId || status === 'queued' || status === 'running'} onClick={submit}>{status === 'queued' || status === 'running' ? '反推处理中…' : '执行图片反推'}</button>
-      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      {error && <InlineAlert type="error" className="mt-3">{error}</InlineAlert>}
     </div>
 
     <div className="rounded-xl border bg-white p-4">
       <h3 className="font-semibold">反推结果</h3>
       <p className="mt-2 text-sm text-gray-500">状态：{status === 'idle' ? '未开始' : status === 'queued' ? '排队中' : status === 'running' ? (pipelineMessage ?? '处理中') : status === 'review' ? '待校对' : '失败'}</p>
       {job && <ol className="mt-3 grid grid-cols-5 gap-1" aria-label="图片反推进度">{pipelineStages.map((stage, index) => { const reached = currentRank >= index + 1; const active = job.progress?.stage === stage.id || (job.progress?.stage === 'repair' && stage.id === 'structure'); return <li key={stage.id} className={`border-t-2 pt-1 text-center text-[10px] sm:text-xs ${active ? 'border-violet-600 font-medium text-violet-700' : reached ? 'border-emerald-500 text-emerald-700' : 'border-slate-200 text-slate-400'}`}>{stage.label}</li>})}</ol>}
-      {job?.errorMessage && <p className="mt-3 text-sm text-red-600">{job.errorCode ? (errorMessages[job.errorCode] ?? job.errorMessage) : job.errorMessage}</p>}
+      {job?.errorMessage && <InlineAlert type="error" className="mt-3">{job.errorCode ? (errorMessages[job.errorCode] ?? job.errorMessage) : job.errorMessage}</InlineAlert>}
       {job?.errorDetails && <details className="mt-3 rounded-md bg-slate-50 p-3 text-xs text-slate-600"><summary className="cursor-pointer font-medium">诊断摘要</summary><dl className="mt-2 grid gap-1 sm:grid-cols-2">{job.errorDetails.finishReason && <><dt>结束原因</dt><dd>{job.errorDetails.finishReason}</dd></>}{job.errorDetails.outputLength !== undefined && <><dt>输出长度</dt><dd>{job.errorDetails.outputLength}</dd></>}{job.errorDetails.outputTokens !== undefined && <><dt>输出 Token</dt><dd>{job.errorDetails.outputTokens}</dd></>}{job.errorDetails.parseMessage && <><dt>解析错误</dt><dd className="break-words">{job.errorDetails.parseMessage}</dd></>}</dl></details>}
       {status === 'failed' && job?.errorDetails?.retryable !== false && <button type="button" className="mt-3 text-sm text-violet-600" onClick={() => retry()}>重试</button>}
       {job?.status === 'succeeded' && parsed && !parsed.success && <p className="mt-3 text-sm text-amber-700">结果格式异常，无法保存为模板。</p>}
