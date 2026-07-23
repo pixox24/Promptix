@@ -109,4 +109,3 @@ const databaseRepository: RecommendationEventRepository = {
 
 export const recordClientRecommendationEvent =
   createRecommendationEventService(databaseRepository);
-

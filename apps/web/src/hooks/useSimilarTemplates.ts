@@ -7,15 +7,20 @@ import type {
   SimilarTemplateViewResult,
 } from '../types/recommendation';
 
+const STATIC_FALLBACK_ENABLED =
+  import.meta.env.VITE_SIMILAR_TEMPLATE_STATIC_FALLBACK !== 'false';
+
 function fallbackResult(template: PromptTemplate): SimilarTemplateViewResult {
   return {
-    items: getSimilarTemplates(template, 4).map((candidate, index) => ({
-      template: candidate,
-      score: 0,
-      position: index + 1,
-      reasonCodes: ['popular'],
-      reasonLabel: '你可能也喜欢',
-    })),
+    items: STATIC_FALLBACK_ENABLED
+      ? getSimilarTemplates(template, 4).map((candidate, index) => ({
+          template: candidate,
+          score: 0,
+          position: index + 1,
+          reasonCodes: ['popular'],
+          reasonLabel: '你可能也喜欢',
+        }))
+      : [],
     requestId: null,
     algorithmVersion: null,
     source: 'fallback',

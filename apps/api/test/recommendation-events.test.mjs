@@ -63,4 +63,3 @@ test('event service rejects mismatched, unknown, and expired requests', async ()
     recommendedTemplateId: 'candidate',
   })).ok, false);
 });
-

@@ -183,4 +183,3 @@ const databaseRepository: SimilarTemplateRepository = {
 
 export const getSimilarTemplateResponse =
   createSimilarTemplateService(databaseRepository);
-

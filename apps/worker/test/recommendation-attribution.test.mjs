@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   createRecommendationAttributionService,
@@ -71,4 +72,16 @@ test('attribution storage failures never fail the generation workflow', async ()
 
   assert.equal(recorded, false);
   assert.equal(errors.length, 1);
+});
+
+test('worker retries attribution even when usage was already counted', async () => {
+  const source = await readFile(
+    new URL('../src/generated-media.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(
+    source,
+    /if\s*\(recorded\.length\)\s*\{[\s\S]*useCount[\s\S]*\}\s*await recordRecommendationGenerationSuccessSafely/,
+  );
 });

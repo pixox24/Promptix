@@ -35,4 +35,3 @@ test('admin recommendation metrics endpoint is authenticated and bounded', async
   assert.ok(metricsIndex > authIndex);
   assert.match(source, /days must be an integer between 1 and 90/);
 });
-

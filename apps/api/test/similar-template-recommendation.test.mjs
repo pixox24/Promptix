@@ -83,4 +83,3 @@ test('similar route is registered before the generic template detail route', asy
   assert.ok(similarIndex < detailIndex);
   assert.match(source, /limit must be an integer between 1 and 12/);
 });
-

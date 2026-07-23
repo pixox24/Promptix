@@ -31,6 +31,7 @@ test('similar templates load from the API with a non-attributed static fallback'
   assert.match(hook, /getSimilarTemplates/);
   assert.match(hook, /requestId:\s*null/);
   assert.match(hook, /source:\s*'fallback'/);
+  assert.match(hook, /VITE_SIMILAR_TEMPLATE_STATIC_FALLBACK/);
 });
 
 test('impressions require half visibility for one second and dedupe replicas', async () => {
@@ -53,4 +54,3 @@ test('generation attribution retries once without an expired context', async () 
   assert.match(detail, /recommendationContextSchema/);
   assert.match(detail, /recRequest/);
 });
-

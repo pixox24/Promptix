@@ -83,6 +83,8 @@ test('content relevance dominates behavioral feedback and filters weak candidate
   assert.equal(ranked[0].template.id, 'high');
   assert.ok(ranked.every((item) => item.contentScore >= 25));
   assert.equal(ranked.some((item) => item.template.id === 'low'), false);
+  assert.match(ranked[0].reasonLabel, /同类产出/);
+  assert.doesNotMatch(ranked[0].reasonLabel, /portrait|cinematic/);
 });
 
 test('ranking is stable for equal scores', () => {
@@ -100,4 +102,3 @@ test('ranking is stable for equal scores', () => {
 
   assert.deepEqual(ranked.map((item) => item.template.id), ['newer', 'older']);
 });
-

@@ -97,7 +97,7 @@ export function rankSimilarTemplates({
       contentScore += 35;
       reasons.push({
         code: 'same_output_type',
-        label: `同为${sourceSemantic.outputType}`,
+        label: '同类产出',
         score: 35,
       });
     }
@@ -106,21 +106,21 @@ export function rankSimilarTemplates({
     if (scenarios.length) {
       const score = scenarios.length * 9;
       contentScore += score;
-      reasons.push({ code: 'shared_scenario', label: `适合${scenarios.join('、')}`, score });
+      reasons.push({ code: 'shared_scenario', label: '使用场景相近', score });
     }
 
     const styles = sharedValues(sourceSemantic.styles, candidateSemantic.styles).slice(0, 2);
     if (styles.length) {
       const score = styles.length * 8;
       contentScore += score;
-      reasons.push({ code: 'shared_style', label: `相近${styles.join('、')}风格`, score });
+      reasons.push({ code: 'shared_style', label: '视觉风格相近', score });
     }
 
     const subjects = sharedValues(sourceSemantic.subjects, candidateSemantic.subjects).slice(0, 2);
     if (subjects.length) {
       const score = subjects.length * 6;
       contentScore += score;
-      reasons.push({ code: 'shared_subject', label: `同类${subjects.join('、')}`, score });
+      reasons.push({ code: 'shared_subject', label: '画面主体相近', score });
     }
 
     const sourceTags = sourceSemantic.tags.length ? sourceSemantic.tags : source.tags;
@@ -167,4 +167,3 @@ export function rankSimilarTemplates({
 
   return ranked.slice(0, Math.max(0, Math.min(12, limit)));
 }
-

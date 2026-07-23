@@ -7,4 +7,3 @@ export function recommendationTemplateTarget(
     ? `${base}?recRequest=${encodeURIComponent(requestId)}`
     : base;
 }
-

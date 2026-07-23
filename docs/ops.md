@@ -133,7 +133,7 @@ SELECT count(*) FROM template_taxonomy_assignments;
 3. 通过管理员接口 `GET /api/admin/templates/:id/recommendation-metrics?days=30` 检查曝光、点击、成功生成、CTR、CVR 和位置表现。
 4. similar endpoint p95 应不高于 250ms，事件 POST p95 应不高于 150ms，推荐接口 5xx 应低于 0.5%。
 5. 若详情页错误率增加超过 0.5 个百分点、similar p95 超过 250ms，或 CTR 比旧版基线低 10% 以上，先将 Web 回滚到静态兜底；保留数据库表和 API 供排查。
-6. 连续稳定 14 天且累计曝光不少于 500 次后，才允许删除默认静态兜底。
+6. 连续稳定 14 天且累计曝光不少于 500 次后，将 Web 构建变量 `VITE_SIMILAR_TEMPLATE_STATIC_FALLBACK=false`；再稳定一个发布周期后，才允许删除静态排序代码。
 
 原始推荐事件保留 180 天。定期执行：
 

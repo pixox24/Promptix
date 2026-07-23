@@ -23,4 +23,3 @@ test('recommendation contracts accept attribution and reject untrusted ranking f
     'similar-v1',
   );
 });
-

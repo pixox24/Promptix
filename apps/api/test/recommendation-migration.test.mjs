@@ -18,4 +18,3 @@ test('recommendation migration persists request snapshots and constrained events
   assert.match(sql, /template_recommendation_events_pair_type_created_idx/i);
   assert.match(sql, /template_recommendation_requests_expires_idx/i);
 });
-

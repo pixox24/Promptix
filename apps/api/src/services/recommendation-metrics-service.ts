@@ -60,4 +60,3 @@ export async function getRecommendationMetrics(
     generationSuccesses: Number(row.generationSuccesses),
   })), days);
 }
-

@@ -55,4 +55,3 @@ CREATE INDEX "template_recommendation_events_pair_type_created_idx"
 --> statement-breakpoint
 CREATE INDEX "template_recommendation_events_request_created_idx"
   ON "template_recommendation_events" USING btree ("request_id","created_at");
-
