@@ -117,7 +117,7 @@ export const promptTemplates = pgTable(
       t.createdAt,
     ),
     check('prompt_templates_workflow_type_check', sql`${t.workflowType} in ('generate','edit')`),
-    check('prompt_templates_taxonomy_review_status_check', sql`${t.taxonomyReviewStatus} in ('pending','needs_attention','reviewed')`),
+    check('prompt_templates_taxonomy_review_status_check', sql`${t.taxonomyReviewStatus} in ('pending','needs_attention','reviewed','auto_verified')`),
   ],
 );
 
@@ -127,8 +127,14 @@ export const templateGovernanceState = pgTable('template_governance_state', {
   leaseUntil: timestamp('lease_until', { withTimezone: true }),
   leaseToken: text('lease_token'),
   lastRunId: uuid('last_run_id'),
+  lifecycleState: text('lifecycle_state').notNull().default('candidate'),
+  observationUntil: timestamp('observation_until', { withTimezone: true }),
+  exposureLimitedAt: timestamp('exposure_limited_at', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [index('template_governance_state_eligibility_idx').on(t.leaseUntil, t.lastScanAt)]);
+}, (t) => [
+  index('template_governance_state_eligibility_idx').on(t.leaseUntil, t.lastScanAt),
+  index('template_governance_state_lifecycle_observation_idx').on(t.lifecycleState, t.observationUntil),
+]);
 
 export const templateTaxonomyAssignments = pgTable(
   'template_taxonomy_assignments',
@@ -306,6 +312,7 @@ export const governanceChangeSets = pgTable(
     ruleSetId: uuid('rule_set_id').notNull().references(() => governanceRuleSets.id),
     ruleSetVersion: integer('rule_set_version').notNull(),
     idempotencyKey: text('idempotency_key').notNull(),
+    permitId: uuid('permit_id'),
     executionMode: text('execution_mode').notNull().default('automatic'),
     status: text('status').notNull().default('planned'),
     summary: jsonb('summary').notNull().default({}),
@@ -318,7 +325,8 @@ export const governanceChangeSets = pgTable(
     uniqueIndex('governance_change_sets_idempotency_key_uidx').on(t.idempotencyKey),
     index('governance_change_sets_run_status_idx').on(t.runId, t.status),
     check('governance_change_sets_status_check', sql`${t.status} in ('planned','auto_executing','awaiting_approval','approved','rejected','partially_succeeded','succeeded','failed','cancelled','rollback_available','rolled_back')`),
-    check('governance_change_sets_execution_mode_check', sql`${t.executionMode} in ('automatic','approval','legacy_mixed')`),
+    uniqueIndex('governance_change_sets_permit_unique').on(t.permitId).where(sql`${t.permitId} is not null`),
+    check('governance_change_sets_execution_mode_check', sql`${t.executionMode} in ('automatic','approval','legacy_mixed','autopilot')`),
   ],
 );
 
@@ -467,6 +475,8 @@ export const generationJobs = pgTable(
     errorDetails: jsonb('error_details'),
     progress: jsonb('progress'),
     resultMeta: jsonb('result_meta'),
+    autopublishRunId: uuid('autopublish_run_id'),
+    autopublishStage: text('autopublish_stage'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -476,6 +486,175 @@ export const generationJobs = pgTable(
   (t) => [
     index('generation_jobs_status_created_idx').on(t.status, t.createdAt),
     index('generation_jobs_owner_status_idx').on(t.ownerKeyHash, t.status),
+  ],
+);
+
+export const agentCapabilityGrants = pgTable(
+  'agent_capability_grants',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    triggerType: text('trigger_type').notNull(),
+    agentId: text('agent_id').notNull(),
+    initiatedBy: uuid('initiated_by').references(() => adminUsers.id),
+    scopes: text('scopes').array().notNull().default([]),
+    inputSnapshotHash: text('input_snapshot_hash'),
+    sourceConstraints: jsonb('source_constraints').notNull().default({}),
+    budget: jsonb('budget').notNull().default({}),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [check('agent_capability_grants_trigger_type_check', sql`${t.triggerType} in ('delegated','scheduled_agent')`)],
+);
+
+export const templateAutopublishSourceItems = pgTable(
+  'template_autopublish_source_items',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    sourceType: text('source_type').notNull(),
+    sourceItemId: text('source_item_id').notNull(),
+    flowType: text('flow_type').notNull(),
+    payload: jsonb('payload').notNull(),
+    status: text('status').notNull().default('pending'),
+    leaseToken: text('lease_token'),
+    leaseUntil: timestamp('lease_until', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('template_autopublish_source_items_source_item_flow_unique').on(t.sourceType, t.sourceItemId, t.flowType),
+    index('template_autopublish_source_items_lease_idx').on(t.status, t.leaseUntil),
+    check('template_autopublish_source_items_flow_type_check', sql`${t.flowType} in ('text_expand','image_reverse')`),
+    check('template_autopublish_source_items_status_check', sql`${t.status} in ('pending','leased','completed','failed','cancelled')`),
+  ],
+);
+
+export const templateAutopublishRuns = pgTable(
+  'template_autopublish_runs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    status: text('status').notNull().default('queued'),
+    currentStage: text('current_stage').notNull().default('queued'),
+    triggerType: text('trigger_type').notNull(),
+    requestedBy: uuid('requested_by').references(() => adminUsers.id),
+    agentId: text('agent_id'),
+    capabilityGrantId: uuid('capability_grant_id').notNull().references(() => agentCapabilityGrants.id),
+    flowType: text('flow_type').notNull(),
+    sourceType: text('source_type').notNull(),
+    sourceItemId: text('source_item_id').notNull(),
+    inputSnapshot: jsonb('input_snapshot').notNull(),
+    inputSnapshotHash: text('input_snapshot_hash').notNull(),
+    ruleSetId: uuid('rule_set_id').notNull().references(() => governanceRuleSets.id),
+    ruleSetVersion: integer('rule_set_version').notNull(),
+    taxonomySnapshotHash: text('taxonomy_snapshot_hash').notNull(),
+    promptVersion: text('prompt_version').notNull(),
+    budgetSnapshot: jsonb('budget_snapshot').notNull(),
+    budgetConsumed: jsonb('budget_consumed').notNull().default({}),
+    repairCount: integer('repair_count').notNull().default(0),
+    templateId: text('template_id').references(() => promptTemplates.id),
+    changeSetId: uuid('change_set_id').references(() => governanceChangeSets.id),
+    idempotencyKey: text('idempotency_key').notNull(),
+    leaseToken: text('lease_token'),
+    leaseUntil: timestamp('lease_until', { withTimezone: true }),
+    errorCode: text('error_code'),
+    errorDetails: jsonb('error_details'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('template_autopublish_runs_idempotency_key_unique').on(t.idempotencyKey),
+    uniqueIndex('template_autopublish_runs_scheduled_source_unique').on(t.sourceType, t.sourceItemId, t.flowType).where(sql`${t.triggerType} = 'scheduled_agent'`),
+    index('template_autopublish_runs_status_created_idx').on(t.status, t.createdAt),
+    check('template_autopublish_runs_status_check', sql`${t.status} in ('queued','running','conflict_waiting','needs_attention','duplicate_found','rejected','succeeded','failed','cancelled')`),
+    check('template_autopublish_runs_trigger_type_check', sql`${t.triggerType} in ('delegated','scheduled_agent')`),
+    check('template_autopublish_runs_flow_type_check', sql`${t.flowType} in ('text_expand','image_reverse')`),
+    check('template_autopublish_runs_repair_count_check', sql`${t.repairCount} between 0 and 2`),
+  ],
+);
+
+export const templateAutopublishArtifacts = pgTable(
+  'template_autopublish_artifacts',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    runId: uuid('run_id').notNull().references(() => templateAutopublishRuns.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    schemaVersion: integer('schema_version').notNull().default(1),
+    contentHash: text('content_hash').notNull(),
+    payload: jsonb('payload').notNull(),
+    modelId: uuid('model_id').references(() => providerModels.id),
+    promptVersion: text('prompt_version'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('template_autopublish_artifacts_run_kind_content_unique').on(t.runId, t.kind, t.contentHash)],
+);
+
+export const templateAutopublishStageAttempts = pgTable(
+  'template_autopublish_stage_attempts',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    runId: uuid('run_id').notNull().references(() => templateAutopublishRuns.id, { onDelete: 'cascade' }),
+    stage: text('stage').notNull(),
+    attempt: integer('attempt').notNull(),
+    status: text('status').notNull(),
+    inputHash: text('input_hash').notNull(),
+    artifactId: uuid('artifact_id').references(() => templateAutopublishArtifacts.id),
+    generationJobId: uuid('generation_job_id').references(() => generationJobs.id),
+    usage: jsonb('usage').notNull().default({}),
+    errorCode: text('error_code'),
+    errorDetails: jsonb('error_details'),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('template_autopublish_stage_attempts_run_stage_attempt_unique').on(t.runId, t.stage, t.attempt),
+    index('template_autopublish_stage_attempts_run_stage_status_idx').on(t.runId, t.stage, t.status),
+    check('template_autopublish_stage_attempts_attempt_check', sql`${t.attempt} > 0`),
+    check('template_autopublish_stage_attempts_status_check', sql`${t.status} in ('queued','running','succeeded','failed','cancelled')`),
+  ],
+);
+
+export const templateAutopublishOutbox = pgTable(
+  'template_autopublish_outbox',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    runId: uuid('run_id').notNull().references(() => templateAutopublishRuns.id, { onDelete: 'cascade' }),
+    eventType: text('event_type').notNull(),
+    dedupeKey: text('dedupe_key').notNull(),
+    payload: jsonb('payload').notNull().default({}),
+    availableAt: timestamp('available_at', { withTimezone: true }).notNull().defaultNow(),
+    leasedUntil: timestamp('leased_until', { withTimezone: true }),
+    leaseToken: text('lease_token'),
+    dispatchedAt: timestamp('dispatched_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('template_autopublish_outbox_dedupe_key_unique').on(t.dedupeKey),
+    index('template_autopublish_outbox_pending_idx').on(t.availableAt).where(sql`${t.dispatchedAt} is null`),
+  ],
+);
+
+export const governanceExecutionPermits = pgTable(
+  'governance_execution_permits',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    autopublishRunId: uuid('autopublish_run_id').notNull().references(() => templateAutopublishRuns.id, { onDelete: 'cascade' }),
+    templateId: text('template_id').notNull().references(() => promptTemplates.id),
+    templateVersion: integer('template_version').notNull(),
+    ruleSetId: uuid('rule_set_id').notNull().references(() => governanceRuleSets.id),
+    ruleSetVersion: integer('rule_set_version').notNull(),
+    action: text('action').notNull(),
+    contentHash: text('content_hash').notNull(),
+    permitHash: text('permit_hash').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('governance_execution_permits_permit_hash_unique').on(t.permitHash),
+    index('governance_execution_permits_expiry_idx').on(t.expiresAt),
+    check('governance_execution_permits_action_check', sql`${t.action} = 'publish'`),
   ],
 );
 

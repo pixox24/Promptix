@@ -120,6 +120,13 @@
       "when": 1784784000000,
       "tag": "0016_similar_template_recommendation_loop",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1784880000000,
+      "tag": "0017_template_autopublish",
+      "breakpoints": true
     }
   ]
 }

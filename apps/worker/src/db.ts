@@ -51,6 +51,8 @@ export const generationJobs = pgTable('generation_jobs', {
   errorDetails: jsonb('error_details'),
   progress: jsonb('progress'),
   resultMeta: jsonb('result_meta'),
+  autopublishRunId: uuid('autopublish_run_id'),
+  autopublishStage: text('autopublish_stage'),
   startedAt: timestamp('started_at', { withTimezone: true }),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
 });
@@ -86,8 +88,10 @@ export const templateRecommendationEvents = pgTable('template_recommendation_eve
 ]);
 
 export const templateGovernanceState = pgTable('template_governance_state', {
-  templateId: text('template_id').primaryKey(), lastScanAt: timestamp('last_scan_at', { withTimezone: true }), leaseUntil: timestamp('lease_until', { withTimezone: true }), leaseToken: text('lease_token'), lastRunId: uuid('last_run_id'), updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+  templateId: text('template_id').primaryKey(), lastScanAt: timestamp('last_scan_at', { withTimezone: true }), leaseUntil: timestamp('lease_until', { withTimezone: true }), leaseToken: text('lease_token'), lastRunId: uuid('last_run_id'), lifecycleState: text('lifecycle_state').notNull().default('candidate'), observationUntil: timestamp('observation_until', { withTimezone: true }), exposureLimitedAt: timestamp('exposure_limited_at', { withTimezone: true }), updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  index('template_governance_state_lifecycle_observation_idx').on(t.lifecycleState, t.observationUntil),
+]);
 
 export const templateVersions = pgTable('template_versions', { id: uuid('id').defaultRandom().primaryKey(), templateId: text('template_id').notNull(), version: integer('version').notNull(), snapshot: jsonb('snapshot').notNull(), source: text('source').notNull(), runId: uuid('run_id'), changeSetId: uuid('change_set_id'), createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow() });
 export const taxonomyTerms = pgTable('taxonomy_terms', { id: uuid('id').primaryKey(), dimension: text('dimension').notNull(), slug: text('slug').notNull(), label: text('label').notNull(), enabled: boolean('enabled').notNull() });
@@ -124,8 +128,142 @@ export const governanceProposals = pgTable('governance_proposals', {
 });
 
 export const governanceChangeSets = pgTable('governance_change_sets', {
-  id: uuid('id').defaultRandom().primaryKey(), runId: uuid('run_id').notNull(), scopeSnapshot: jsonb('scope_snapshot').notNull(), exclusionIds: text('exclusion_ids').array().notNull(), ruleSetId: uuid('rule_set_id').notNull(), ruleSetVersion: integer('rule_set_version').notNull(), idempotencyKey: text('idempotency_key').notNull(), executionMode: text('execution_mode').notNull(), status: text('status').notNull(), summary: jsonb('summary').notNull(), rollbackUntil: timestamp('rollback_until', { withTimezone: true }), executedAt: timestamp('executed_at', { withTimezone: true }), createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(), updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  id: uuid('id').defaultRandom().primaryKey(), runId: uuid('run_id').notNull(), scopeSnapshot: jsonb('scope_snapshot').notNull(), exclusionIds: text('exclusion_ids').array().notNull(), ruleSetId: uuid('rule_set_id').notNull(), ruleSetVersion: integer('rule_set_version').notNull(), idempotencyKey: text('idempotency_key').notNull(), permitId: uuid('permit_id'), executionMode: text('execution_mode').notNull(), status: text('status').notNull(), summary: jsonb('summary').notNull(), rollbackUntil: timestamp('rollback_until', { withTimezone: true }), executedAt: timestamp('executed_at', { withTimezone: true }), createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(), updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('governance_change_sets_permit_unique').on(t.permitId).where(sql`${t.permitId} is not null`),
+]);
+
+export const agentCapabilityGrants = pgTable('agent_capability_grants', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  triggerType: text('trigger_type').notNull(),
+  agentId: text('agent_id').notNull(),
+  initiatedBy: uuid('initiated_by'),
+  scopes: text('scopes').array().notNull().default([]),
+  inputSnapshotHash: text('input_snapshot_hash'),
+  sourceConstraints: jsonb('source_constraints').notNull().default({}),
+  budget: jsonb('budget').notNull().default({}),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const templateAutopublishSourceItems = pgTable('template_autopublish_source_items', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  sourceType: text('source_type').notNull(),
+  sourceItemId: text('source_item_id').notNull(),
+  flowType: text('flow_type').notNull(),
+  payload: jsonb('payload').notNull(),
+  status: text('status').notNull().default('pending'),
+  leaseToken: text('lease_token'),
+  leaseUntil: timestamp('lease_until', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('template_autopublish_source_items_source_item_flow_unique').on(t.sourceType, t.sourceItemId, t.flowType),
+  index('template_autopublish_source_items_lease_idx').on(t.status, t.leaseUntil),
+]);
+
+export const templateAutopublishRuns = pgTable('template_autopublish_runs', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  status: text('status').notNull().default('queued'),
+  currentStage: text('current_stage').notNull().default('queued'),
+  triggerType: text('trigger_type').notNull(),
+  requestedBy: uuid('requested_by'),
+  agentId: text('agent_id'),
+  capabilityGrantId: uuid('capability_grant_id').notNull(),
+  flowType: text('flow_type').notNull(),
+  sourceType: text('source_type').notNull(),
+  sourceItemId: text('source_item_id').notNull(),
+  inputSnapshot: jsonb('input_snapshot').notNull(),
+  inputSnapshotHash: text('input_snapshot_hash').notNull(),
+  ruleSetId: uuid('rule_set_id').notNull(),
+  ruleSetVersion: integer('rule_set_version').notNull(),
+  taxonomySnapshotHash: text('taxonomy_snapshot_hash').notNull(),
+  promptVersion: text('prompt_version').notNull(),
+  budgetSnapshot: jsonb('budget_snapshot').notNull(),
+  budgetConsumed: jsonb('budget_consumed').notNull().default({}),
+  repairCount: integer('repair_count').notNull().default(0),
+  templateId: text('template_id'),
+  changeSetId: uuid('change_set_id'),
+  idempotencyKey: text('idempotency_key').notNull(),
+  leaseToken: text('lease_token'),
+  leaseUntil: timestamp('lease_until', { withTimezone: true }),
+  errorCode: text('error_code'),
+  errorDetails: jsonb('error_details'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  startedAt: timestamp('started_at', { withTimezone: true }),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+}, (t) => [
+  uniqueIndex('template_autopublish_runs_idempotency_key_unique').on(t.idempotencyKey),
+  uniqueIndex('template_autopublish_runs_scheduled_source_unique').on(t.sourceType, t.sourceItemId, t.flowType).where(sql`${t.triggerType} = 'scheduled_agent'`),
+  index('template_autopublish_runs_status_created_idx').on(t.status, t.createdAt),
+]);
+
+export const templateAutopublishArtifacts = pgTable('template_autopublish_artifacts', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  runId: uuid('run_id').notNull(),
+  kind: text('kind').notNull(),
+  schemaVersion: integer('schema_version').notNull().default(1),
+  contentHash: text('content_hash').notNull(),
+  payload: jsonb('payload').notNull(),
+  modelId: uuid('model_id'),
+  promptVersion: text('prompt_version'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('template_autopublish_artifacts_run_kind_content_unique').on(t.runId, t.kind, t.contentHash)]);
+
+export const templateAutopublishStageAttempts = pgTable('template_autopublish_stage_attempts', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  runId: uuid('run_id').notNull(),
+  stage: text('stage').notNull(),
+  attempt: integer('attempt').notNull(),
+  status: text('status').notNull(),
+  inputHash: text('input_hash').notNull(),
+  artifactId: uuid('artifact_id'),
+  generationJobId: uuid('generation_job_id'),
+  usage: jsonb('usage').notNull().default({}),
+  errorCode: text('error_code'),
+  errorDetails: jsonb('error_details'),
+  startedAt: timestamp('started_at', { withTimezone: true }),
+  finishedAt: timestamp('finished_at', { withTimezone: true }),
+}, (t) => [
+  uniqueIndex('template_autopublish_stage_attempts_run_stage_attempt_unique').on(t.runId, t.stage, t.attempt),
+  index('template_autopublish_stage_attempts_run_stage_status_idx').on(t.runId, t.stage, t.status),
+]);
+
+export const templateAutopublishOutbox = pgTable('template_autopublish_outbox', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  runId: uuid('run_id').notNull(),
+  eventType: text('event_type').notNull(),
+  dedupeKey: text('dedupe_key').notNull(),
+  payload: jsonb('payload').notNull().default({}),
+  availableAt: timestamp('available_at', { withTimezone: true }).notNull().defaultNow(),
+  leasedUntil: timestamp('leased_until', { withTimezone: true }),
+  leaseToken: text('lease_token'),
+  dispatchedAt: timestamp('dispatched_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('template_autopublish_outbox_dedupe_key_unique').on(t.dedupeKey),
+  index('template_autopublish_outbox_pending_idx').on(t.availableAt).where(sql`${t.dispatchedAt} is null`),
+]);
+
+export const governanceExecutionPermits = pgTable('governance_execution_permits', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  autopublishRunId: uuid('autopublish_run_id').notNull(),
+  templateId: text('template_id').notNull(),
+  templateVersion: integer('template_version').notNull(),
+  ruleSetId: uuid('rule_set_id').notNull(),
+  ruleSetVersion: integer('rule_set_version').notNull(),
+  action: text('action').notNull(),
+  contentHash: text('content_hash').notNull(),
+  permitHash: text('permit_hash').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true }),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex('governance_execution_permits_permit_hash_unique').on(t.permitHash),
+  index('governance_execution_permits_expiry_idx').on(t.expiresAt),
+]);
 
 export const governanceChangeSetItems = pgTable('governance_change_set_items', {
   id: uuid('id').defaultRandom().primaryKey(), changeSetId: uuid('change_set_id').notNull(), proposalId: uuid('proposal_id').notNull(), templateId: text('template_id').notNull(), status: text('status').notNull(), appliedVersion: integer('applied_version'), errorCode: text('error_code'), errorMessage: text('error_message'), startedAt: timestamp('started_at', { withTimezone: true }), finishedAt: timestamp('finished_at', { withTimezone: true }),
