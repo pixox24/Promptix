@@ -48,23 +48,32 @@ export const autopublishQualityAssessmentSchema = z.object({
   hardGateFailures: z.array(autopublishHardGateSchema),
   requiresCounterReview: z.boolean(),
 });
+
+export const autopublishBudgetSchema = z.object({
+  maximumModelCalls: z.number().int().min(1).max(20).default(6),
+  maximumCoverAttempts: z.number().int().min(1).max(5).default(2),
+  maximumDurationMinutes: z.number().int().min(1).max(60).default(10),
+  maximumConcurrentPerAgent: z.number().int().min(1).max(20).default(2),
+  maximumRunsPerHour: z.number().int().min(1).max(500).default(20),
+  maximumBatchSize: z.number().int().min(1).max(100).default(10),
+}).default({});
+
+export const autopublishBudgetConsumedSchema = z.object({
+  modelCalls: z.number().int().min(0).max(20),
+  coverAttempts: z.number().int().min(0).max(5),
+  durationMinutes: z.number().int().min(0).max(60),
+});
+
 export const autopublishRulesSchema = z.object({
   delegatedEnabled: z.boolean().default(false),
   scheduledAgentEnabled: z.boolean().default(false),
   mode: z.enum(['shadow', 'live']).default('shadow'),
   frozen: z.boolean().default(false),
   maximumRepairAttempts: z.number().int().min(0).max(2).default(2),
-  minimumOverallScore: z.number().min(0).max(100).default(92),
-  minimumCriticalDimensionScore: z.number().min(0).max(100).default(85),
-  observationHours: z.number().int().min(1).max(24 * 30).default(72),
-  budgets: z.object({
-    maximumModelCalls: z.number().int().min(1).max(20).default(6),
-    maximumCoverAttempts: z.number().int().min(1).max(5).default(2),
-    maximumDurationMinutes: z.number().int().min(1).max(60).default(10),
-    maximumConcurrentPerAgent: z.number().int().min(1).max(20).default(2),
-    maximumRunsPerHour: z.number().int().min(1).max(500).default(20),
-    maximumBatchSize: z.number().int().min(1).max(100).default(10),
-  }).default({}),
+  minimumOverallScore: z.number().min(92).max(100).default(92),
+  minimumCriticalDimensionScore: z.number().min(85).max(100).default(85),
+  observationHours: z.number().int().min(72).max(24 * 30).default(72),
+  budgets: autopublishBudgetSchema,
 }).default({});
 export type AutopublishRules = z.infer<typeof autopublishRulesSchema>;
 export type AutopublishQualityAssessment = z.infer<typeof autopublishQualityAssessmentSchema>;
@@ -79,7 +88,50 @@ export const autopublishCreateInputSchema = z.object({
   modelId: z.string().uuid().optional(),
   visionModelId: z.string().uuid().optional(),
   idempotencyKey: z.string().trim().min(8).max(200),
+}).strict();
+
+export const autopublishRunSchema = z.object({
+  id: z.string().uuid(),
+  status: autopublishRunStatusSchema,
+  currentStage: autopublishStageSchema,
+  triggerType: autopublishTriggerSchema,
+  requestedBy: z.string().uuid().nullable(),
+  agentId: z.string().trim().min(1).max(120).nullable(),
+  capabilityGrantId: z.string().uuid(),
+  flowType: autopublishFlowTypeSchema,
+  sourceType: z.string().trim().min(1).max(80),
+  sourceItemId: z.string().trim().min(1).max(200),
+  inputSnapshotHash: z.string().trim().min(1).max(200),
+  ruleSetId: z.string().uuid(),
+  ruleSetVersion: z.number().int().min(1).max(1_000_000),
+  taxonomySnapshotHash: z.string().trim().min(1).max(200),
+  promptVersion: z.string().trim().min(1).max(120),
+  budgetSnapshot: autopublishBudgetSchema,
+  budgetConsumed: autopublishBudgetConsumedSchema,
+  repairCount: z.number().int().min(0).max(2),
+  templateId: z.string().trim().min(1).max(120).nullable(),
+  permitId: z.string().uuid().nullable(),
+  changeSetId: z.string().uuid().nullable(),
+  errorCode: autopublishErrorCodeSchema.nullable(),
+  errorDetails: z.record(z.unknown()).nullable(),
+  nextAllowedActions: z.array(autopublishRecoveryActionSchema).max(autopublishRecoveryActionSchema.options.length),
+  createdAt: z.string().datetime(),
+  finishedAt: z.string().datetime().nullable(),
+  observationUntil: z.string().datetime().nullable(),
+  rollbackUntil: z.string().datetime().nullable(),
 });
+export type AutopublishRun = z.infer<typeof autopublishRunSchema>;
+
+export const autopublishTaxonomyVerificationSchema = z.object({
+  runId: z.string().uuid(),
+  agentId: z.string().trim().min(1).max(120).nullable(),
+  modelId: z.string().uuid(),
+  promptVersion: z.string().trim().min(1).max(120),
+  taxonomySnapshotHash: z.string().trim().min(1).max(200),
+  evidenceArtifactId: z.string().uuid(),
+  verifiedAt: z.string().datetime(),
+});
+export type AutopublishTaxonomyVerification = z.infer<typeof autopublishTaxonomyVerificationSchema>;
 
 export function decideAutopublishPolicy(input: {
   assessment: AutopublishQualityAssessment;

@@ -266,7 +266,7 @@ export const templateVersionSnapshotSchema = z.object({
   })).max(100).default([]),
   taxonomyReviewedAt: z.string().datetime().nullable().default(null),
   taxonomyReviewedBy: z.string().uuid().nullable().default(null),
-  taxonomyReviewStatus: z.enum(['pending', 'needs_attention', 'reviewed']).default('pending'),
+  taxonomyReviewStatus: z.enum(['pending', 'needs_attention', 'reviewed', 'auto_verified']).default('pending'),
 });
 export type TemplateVersionSnapshot = z.infer<typeof templateVersionSnapshotSchema>;
 
