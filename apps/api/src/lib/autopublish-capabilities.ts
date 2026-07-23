@@ -71,7 +71,7 @@ function assertSourceConstraints(
 ) {
   const constraints = grant.sourceConstraints;
   if (!constraints || typeof constraints !== 'object' || Array.isArray(constraints)) {
-    throw new AutopublishCapabilityError('AUTOPUBLISH_GRANT_SOURCE_FORBIDDEN');
+    throw new AutopublishCapabilityError('AUTOPUBLISH_GRANT_BINDING_INVALID');
   }
 
   const sourceTypes = asStringArray(constraints.sourceTypes);
@@ -84,9 +84,15 @@ function assertSourceConstraints(
     || ('sourceItemIdPrefixes' in constraints && !prefixes)
     || ('flowTypes' in constraints && !flowTypes)
   );
-  if (malformed) throw new AutopublishCapabilityError('AUTOPUBLISH_GRANT_SOURCE_FORBIDDEN');
+  if (
+    malformed
+    || !sourceTypes?.length
+    || !flowTypes?.length
+  ) {
+    throw new AutopublishCapabilityError('AUTOPUBLISH_GRANT_BINDING_INVALID');
+  }
 
-  if (sourceTypes && (!request.sourceType || !sourceTypes.includes(request.sourceType))) {
+  if (!request.sourceType || !sourceTypes.includes(request.sourceType)) {
     throw new AutopublishCapabilityError('AUTOPUBLISH_GRANT_SOURCE_FORBIDDEN');
   }
   if (sourceItemIds && (!request.sourceItemId || !sourceItemIds.includes(request.sourceItemId))) {
@@ -95,7 +101,7 @@ function assertSourceConstraints(
   if (prefixes && (!request.sourceItemId || !prefixes.some((prefix) => request.sourceItemId!.startsWith(prefix)))) {
     throw new AutopublishCapabilityError('AUTOPUBLISH_GRANT_SOURCE_FORBIDDEN');
   }
-  if (flowTypes && (!request.flowType || !flowTypes.includes(request.flowType))) {
+  if (!request.flowType || !flowTypes.includes(request.flowType)) {
     throw new AutopublishCapabilityError('AUTOPUBLISH_GRANT_SOURCE_FORBIDDEN');
   }
 }
@@ -129,13 +135,23 @@ export function assertAutopublishGrant(
   ) {
     throw new AutopublishCapabilityError('AUTOPUBLISH_SCOPE_FORBIDDEN');
   }
+  if (!grant.agentId.trim() || !request.agentId) {
+    throw new AutopublishCapabilityError('AUTOPUBLISH_GRANT_BINDING_INVALID');
+  }
+  if (request.triggerType === 'delegated' && (
+    !grant.inputSnapshotHash?.trim()
+    || !grant.initiatedBy
+    || !request.requestedBy
+  )) {
+    throw new AutopublishCapabilityError('AUTOPUBLISH_GRANT_BINDING_INVALID');
+  }
   if (grant.inputSnapshotHash && grant.inputSnapshotHash !== request.inputSnapshotHash) {
     throw new AutopublishCapabilityError('AUTOPUBLISH_GRANT_INPUT_MISMATCH');
   }
   if (grant.initiatedBy && grant.initiatedBy !== request.requestedBy) {
     throw new AutopublishCapabilityError('AUTOPUBLISH_GRANT_INITIATOR_MISMATCH');
   }
-  if (request.agentId !== undefined && grant.agentId !== request.agentId) {
+  if (grant.agentId !== request.agentId) {
     throw new AutopublishCapabilityError('AUTOPUBLISH_GRANT_AGENT_MISMATCH');
   }
   assertSourceConstraints(grant, request);

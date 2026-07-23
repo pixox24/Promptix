@@ -20,6 +20,7 @@ import {
 import type { CapabilityGrant } from './autopublish-capabilities.js';
 import {
   AutopublishServiceError,
+  type AutopublishAdminActor,
   type AutopublishArtifactView,
   type AutopublishCreateRecord,
   type AutopublishRunView,
@@ -47,14 +48,13 @@ const TERMINAL_CHANGE_SET_STATUSES = new Set([
   'rolled_back',
 ]);
 
-const RECOVERY_STAGE: Record<AutopublishRecoveryAction, string> = {
+const RECOVERY_STAGE: Omit<Record<AutopublishRecoveryAction, string>, 'retry_after_conflict'> = {
   edit_draft: 'validating',
   map_taxonomy: 'verifying_taxonomy',
   review_taxonomy: 'verifying_taxonomy',
   confirm_distinct: 'creating_template',
   retry_cover: 'generating_cover',
   retry_quality: 'reviewing_quality',
-  retry_after_conflict: 'creating_template',
 };
 
 const RECOVERY_BY_ERROR: Record<string, AutopublishRecoveryAction[]> = {
@@ -70,13 +70,12 @@ const RECOVERY_BY_ERROR: Record<string, AutopublishRecoveryAction[]> = {
   ACTIVE_GOVERNANCE_WORK_EXISTS: ['retry_after_conflict'],
 };
 
-function actorEvidence(actorId: string) {
-  const isAdminId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(actorId);
-  return {
-    actorType: isAdminId ? 'admin' : 'agent',
-    actorId: isAdminId ? actorId : null,
-    agentId: isAdminId ? undefined : actorId,
-  };
+export function recoveryStageFor(errorCode: string | null, action: AutopublishRecoveryAction) {
+  if (action !== 'retry_after_conflict') return RECOVERY_STAGE[action];
+  if (errorCode === 'ACTIVE_GOVERNANCE_WORK_EXISTS') return 'issuing_permit';
+  if (errorCode === 'VERSION_CONFLICT') return 'validating';
+  if (errorCode === 'RULE_CONFLICT') return 'reviewing_quality';
+  throw new AutopublishServiceError('AUTOPUBLISH_ACTION_FORBIDDEN');
 }
 
 function allowedActions(row: RunRow, changeSet?: { status: string }): AutopublishRecoveryAction[] {
@@ -121,6 +120,11 @@ function toStoredRun(
   changeSet?: ChangeSetRow,
   governanceState?: GovernanceStateRow,
 ): StoredAutopublishRun {
+  const budgetSnapshot = autopublishBudgetSchema.safeParse(row.budgetSnapshot);
+  const budgetConsumed = autopublishBudgetConsumedSchema.safeParse(row.budgetConsumed);
+  if (!budgetSnapshot.success || !budgetConsumed.success) {
+    throw new AutopublishServiceError('AUTOPUBLISH_RUN_SNAPSHOT_INVALID');
+  }
   const run = {
     id: row.id,
     status: row.status,
@@ -137,8 +141,8 @@ function toStoredRun(
     ruleSetVersion: row.ruleSetVersion,
     taxonomySnapshotHash: row.taxonomySnapshotHash,
     promptVersion: row.promptVersion,
-    budgetSnapshot: autopublishBudgetSchema.parse(row.budgetSnapshot),
-    budgetConsumed: autopublishBudgetConsumedSchema.parse(row.budgetConsumed),
+    budgetSnapshot: budgetSnapshot.data,
+    budgetConsumed: budgetConsumed.data,
     repairCount: row.repairCount,
     templateId: row.templateId,
     permitId: permit?.id ?? null,
@@ -292,13 +296,14 @@ export function createAutopublishRepository(): AutopublishServiceRepository {
         }
 
         await tx.insert(governanceAuditEvents).values({
-          actorType: input.requestedBy ? 'admin' : 'agent',
-          actorId: input.requestedBy,
+          actorType: input.actor.type,
+          actorId: null,
           eventType: 'autopublish.run_created',
           targetType: 'autopublish_run',
           targetId: created.id,
           payload: {
-            agentId: input.agentId,
+            agentId: input.actor.id,
+            actorCapabilityGrantId: input.actor.capabilityGrantId,
             capabilityGrantId: input.capabilityGrantId,
             idempotencyKey: input.idempotencyKey,
             inputSnapshotHash: input.inputSnapshotHash,
@@ -326,7 +331,7 @@ export function createAutopublishRepository(): AutopublishServiceRepository {
 
     getRunView: getView,
 
-    async cancelRun(id, actorId, now) {
+    async cancelRun(id, actor: AutopublishAdminActor, now) {
       await getDb().transaction(async (tx) => {
         await tx.execute(sql`select ${templateAutopublishRuns.id} from ${templateAutopublishRuns}
           where ${templateAutopublishRuns.id} = ${id} for update`);
@@ -342,20 +347,19 @@ export function createAutopublishRepository(): AutopublishServiceRepository {
           leaseToken: null,
           leaseUntil: null,
         }).where(eq(templateAutopublishRuns.id, id));
-        const actor = actorEvidence(actorId);
         await tx.insert(governanceAuditEvents).values({
-          actorType: actor.actorType,
-          actorId: actor.actorId,
+          actorType: actor.type,
+          actorId: actor.id,
           eventType: 'autopublish.run_cancelled',
           targetType: 'autopublish_run',
           targetId: id,
-          payload: { agentId: actor.agentId },
+          payload: {},
         });
       });
       return (await getView(id))!;
     },
 
-    async actRun(id, action, actorId, idempotencyKey) {
+    async actRun(id, action, actor: AutopublishAdminActor, idempotencyKey) {
       const result = await getDb().transaction(async (tx) => {
         await tx.execute(sql`select ${templateAutopublishRuns.id} from ${templateAutopublishRuns}
           where ${templateAutopublishRuns.id} = ${id} for update`);
@@ -394,7 +398,7 @@ export function createAutopublishRepository(): AutopublishServiceRepository {
           }
         }
 
-        const stage = RECOVERY_STAGE[action];
+        const stage = recoveryStageFor(row.errorCode, action);
         const [previous] = await tx.select({ attempt: templateAutopublishStageAttempts.attempt })
           .from(templateAutopublishStageAttempts)
           .where(and(
@@ -421,14 +425,13 @@ export function createAutopublishRepository(): AutopublishServiceRepository {
           leaseToken: null,
           leaseUntil: null,
         }).where(eq(templateAutopublishRuns.id, id));
-        const actor = actorEvidence(actorId);
         await tx.insert(governanceAuditEvents).values({
-          actorType: actor.actorType,
-          actorId: actor.actorId,
+          actorType: actor.type,
+          actorId: actor.id,
           eventType: 'autopublish.recovery_action',
           targetType: 'autopublish_run',
           targetId: id,
-          payload: { action, idempotencyKey, stage, attempt, agentId: actor.agentId },
+          payload: { action, idempotencyKey, stage, attempt },
         });
         await tx.insert(templateAutopublishOutbox).values({
           runId: id,

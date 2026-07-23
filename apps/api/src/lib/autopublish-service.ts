@@ -76,7 +76,12 @@ export type AutopublishRunView = StoredAutopublishRun & {
   artifacts: AutopublishArtifactView[];
 };
 
+export type AutopublishAdminActor = { type: 'admin'; id: string };
+export type AutopublishAgentActor = { type: 'agent'; id: string; capabilityGrantId: string };
+export type AutopublishActor = AutopublishAdminActor | AutopublishAgentActor;
+
 export type AutopublishCreateRecord = {
+  actor: AutopublishAgentActor;
   triggerType: CreateAutopublishRunInput['triggerType'];
   requestedBy: string | null;
   agentId: string | null;
@@ -99,11 +104,11 @@ export type AutopublishServiceRepository = {
   getGrant(id: string): Promise<CapabilityGrant | null>;
   createRun(input: AutopublishCreateRecord): Promise<StoredAutopublishRun>;
   getRunView(id: string): Promise<AutopublishRunView | null>;
-  cancelRun(id: string, actorId: string, now: Date): Promise<AutopublishRunView>;
+  cancelRun(id: string, actor: AutopublishAdminActor, now: Date): Promise<AutopublishRunView>;
   actRun(
     id: string,
     action: AutopublishRecoveryAction,
-    actorId: string,
+    actor: AutopublishAdminActor,
     idempotencyKey: string,
     now: Date,
   ): Promise<AutopublishRunView>;
@@ -121,11 +126,11 @@ export type AutopublishServiceDependencies = {
 export type AutopublishService = {
   create(input: CreateAutopublishRunInput): Promise<AutopublishRun>;
   get(id: string): Promise<AutopublishRunView | null>;
-  cancel(id: string, actorId: string): Promise<AutopublishRunView>;
+  cancel(id: string, actor: AutopublishActor): Promise<AutopublishRunView>;
   act(
     id: string,
     action: AutopublishRecoveryAction,
-    actorId: string,
+    actor: AutopublishActor,
     idempotencyKey: string,
   ): Promise<AutopublishRunView>;
   listExceptions(): Promise<AutopublishRunView[]>;
@@ -154,7 +159,7 @@ function minimumBudget(ruleBudget: AutopublishBudget, grantBudget: AutopublishBu
 }
 
 function normalizeInput(input: CreateAutopublishRunInput): AutopublishInputSnapshot {
-  const parsed = autopublishCreateInputSchema.parse({
+  const result = autopublishCreateInputSchema.safeParse({
     flowType: input.flowType,
     triggerType: input.triggerType,
     ...(input.text === undefined ? {} : { text: input.text }),
@@ -165,6 +170,8 @@ function normalizeInput(input: CreateAutopublishRunInput): AutopublishInputSnaps
     ...(input.visionModelId === undefined ? {} : { visionModelId: input.visionModelId }),
     idempotencyKey: input.idempotencyKey,
   });
+  if (!result.success) throw new AutopublishServiceError('AUTOPUBLISH_INPUT_INVALID');
+  const parsed = result.data;
   return {
     flowType: parsed.flowType,
     triggerType: parsed.triggerType,
@@ -207,64 +214,91 @@ export function createAutopublishService(
         return replay;
       }
 
-      const grant = await repository.getGrant(input.capabilityGrantId);
-      if (!grant) throw new AutopublishServiceError('AUTOPUBLISH_GRANT_NOT_FOUND');
+      try {
+        const grant = await repository.getGrant(input.capabilityGrantId);
+        if (!grant) throw new AutopublishServiceError('AUTOPUBLISH_GRANT_NOT_FOUND');
 
-      const active = await dependencies.loadRules();
-      const rules = autopublishRulesSchema.parse(active.rules);
-      assertTriggerEnabled(rules, input.triggerType);
-      const grantBudget = autopublishBudgetSchema.parse(grant.budget);
-      const budgetSnapshot = minimumBudget(rules.budgets, grantBudget);
+        const active = await dependencies.loadRules();
+        const parsedRules = autopublishRulesSchema.safeParse(active.rules);
+        if (!parsedRules.success) throw new AutopublishServiceError('AUTOPUBLISH_RULES_INVALID');
+        const rules = parsedRules.data;
+        assertTriggerEnabled(rules, input.triggerType);
+        const parsedGrantBudget = autopublishBudgetSchema.safeParse(grant.budget);
+        if (!parsedGrantBudget.success) {
+          throw new AutopublishServiceError('AUTOPUBLISH_GRANT_BUDGET_INVALID');
+        }
+        const budgetSnapshot = minimumBudget(rules.budgets, parsedGrantBudget.data);
 
-      assertAutopublishGrant(grant, {
-        triggerType: input.triggerType,
-        scope: 'autopublish.run:create',
-        inputSnapshotHash,
-        now: dependencies.now(),
-        requestedBy: input.requestedBy,
-        agentId: input.agentId,
-        sourceType: input.sourceType,
-        sourceItemId: input.sourceItemId,
-        flowType: input.flowType,
-        budget: budgetSnapshot,
-      });
+        assertAutopublishGrant(grant, {
+          triggerType: input.triggerType,
+          scope: 'autopublish.run:create',
+          inputSnapshotHash,
+          now: dependencies.now(),
+          requestedBy: input.requestedBy,
+          agentId: input.agentId,
+          sourceType: input.sourceType,
+          sourceItemId: input.sourceItemId,
+          flowType: input.flowType,
+          budget: budgetSnapshot,
+        });
 
-      const [taxonomy, promptVersion] = await Promise.all([
-        dependencies.loadTaxonomy(),
-        dependencies.loadPromptVersion(input.flowType),
-      ]);
-      return repository.createRun({
-        triggerType: input.triggerType,
-        requestedBy: input.requestedBy,
-        agentId: input.agentId,
-        capabilityGrantId: input.capabilityGrantId,
-        flowType: input.flowType,
-        sourceType: input.sourceType,
-        sourceItemId: input.sourceItemId,
-        inputSnapshot,
-        inputSnapshotHash,
-        ruleSetId: active.id,
-        ruleSetVersion: active.version,
-        taxonomySnapshotHash: taxonomy.hash,
-        promptVersion,
-        budgetSnapshot,
-        idempotencyKey: input.idempotencyKey,
-      });
+        const [taxonomy, promptVersion] = await Promise.all([
+          dependencies.loadTaxonomy(),
+          dependencies.loadPromptVersion(input.flowType),
+        ]);
+        return await repository.createRun({
+          actor: {
+            type: 'agent',
+            id: grant.agentId,
+            capabilityGrantId: grant.id,
+          },
+          triggerType: input.triggerType,
+          requestedBy: input.requestedBy,
+          agentId: input.agentId,
+          capabilityGrantId: input.capabilityGrantId,
+          flowType: input.flowType,
+          sourceType: input.sourceType,
+          sourceItemId: input.sourceItemId,
+          inputSnapshot,
+          inputSnapshotHash,
+          ruleSetId: active.id,
+          ruleSetVersion: active.version,
+          taxonomySnapshotHash: taxonomy.hash,
+          promptVersion,
+          budgetSnapshot,
+          idempotencyKey: input.idempotencyKey,
+        });
+      } catch (error) {
+        const winner = await repository.findByIdempotencyKey(input.idempotencyKey);
+        if (winner) {
+          if (winner.inputSnapshotHash !== inputSnapshotHash) {
+            throw new AutopublishServiceError('AUTOPUBLISH_IDEMPOTENCY_MISMATCH');
+          }
+          return winner;
+        }
+        throw error;
+      }
     },
 
     get(id) {
       return repository.getRunView(id);
     },
 
-    cancel(id, actorId) {
-      return repository.cancelRun(id, actorId, dependencies.now());
+    cancel(id, actor) {
+      if (actor.type !== 'admin') {
+        throw new AutopublishServiceError('AUTOPUBLISH_CANCEL_ADMIN_REQUIRED');
+      }
+      return repository.cancelRun(id, actor, dependencies.now());
     },
 
-    act(id, action, actorId, idempotencyKey) {
+    act(id, action, actor, idempotencyKey) {
+      if (actor.type !== 'admin') {
+        throw new AutopublishServiceError('AUTOPUBLISH_ACTION_ADMIN_REQUIRED');
+      }
       const parsed = autopublishRecoveryActionSchema.safeParse(action);
       if (!parsed.success) throw new AutopublishServiceError('AUTOPUBLISH_ACTION_FORBIDDEN');
       if (!idempotencyKey.trim()) throw new AutopublishServiceError('AUTOPUBLISH_ACTION_IDEMPOTENCY_REQUIRED');
-      return repository.actRun(id, parsed.data, actorId, idempotencyKey, dependencies.now());
+      return repository.actRun(id, parsed.data, actor, idempotencyKey, dependencies.now());
     },
 
     listExceptions() {
