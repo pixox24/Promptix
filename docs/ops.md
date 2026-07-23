@@ -124,6 +124,34 @@ SELECT count(*) FROM template_taxonomy_assignments;
 - 管理端 Cookie 使用 HttpOnly；生产必须设置 `COOKIE_SECURE=true` 并启用 HTTPS。
 - 管理上传限制为图片 MIME 且最大 10MB。
 - 定期审计管理员账号、RAM 最小权限和失败任务日志。
+## 相似模板推荐闭环
+
+发布顺序固定为：
+
+1. 先执行 `npm run db:migrate` 并部署 API、Worker，确认 `GET /api/templates/:id/similar` 返回 `similar-v1`。
+2. 再部署 Web，保留静态推荐兜底一个发布周期；兜底结果不带 `requestId`，也不上报推荐事件。
+3. 通过管理员接口 `GET /api/admin/templates/:id/recommendation-metrics?days=30` 检查曝光、点击、成功生成、CTR、CVR 和位置表现。
+4. similar endpoint p95 应不高于 250ms，事件 POST p95 应不高于 150ms，推荐接口 5xx 应低于 0.5%。
+5. 若详情页错误率增加超过 0.5 个百分点、similar p95 超过 250ms，或 CTR 比旧版基线低 10% 以上，先将 Web 回滚到静态兜底；保留数据库表和 API 供排查。
+6. 连续稳定 14 天且累计曝光不少于 500 次后，才允许删除默认静态兜底。
+
+原始推荐事件保留 180 天。定期执行：
+
+```sql
+delete from template_recommendation_events
+where created_at < now() - interval '180 days';
+
+delete from template_recommendation_requests r
+where r.created_at < now() - interval '180 days'
+  and not exists (
+    select 1
+    from template_recommendation_events e
+    where e.request_id = r.id
+  );
+```
+
+应用回滚不删除 `template_recommendation_requests` 或 `template_recommendation_events`。推荐事件写入失败不得阻断详情页跳转和生成流程；worker 会记录 `recommendation_attribution_failed` 结构化错误用于排查。
+
 # 图片反推流水线
 
 图片反推默认先由视觉模型生成客观描述，再由文本结构化模型生成模板 JSON。模型自身的 `temperature` 和 `maxOutputTokens` 配置优先；未配置时使用：

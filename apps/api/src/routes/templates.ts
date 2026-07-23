@@ -14,6 +14,7 @@ import { assertConfirmableSemantic, legacyCategoryForOutputType, resolveSemantic
 import { buildTemplateVersionSnapshot, recordInitialTemplateVersion, updateTemplateWithVersion } from '../lib/template-versioning.js';
 import { getSimilarTemplateResponse } from '../services/similar-template-service.js';
 import { recordClientRecommendationEvent } from '../services/recommendation-event-service.js';
+import { getRecommendationMetrics } from '../services/recommendation-metrics-service.js';
 
 const templateInput = templateDraftSchema.extend({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,79}$/).optional(),
@@ -259,6 +260,19 @@ publicTemplateRoutes.get('/:id', async (c) => {
 
 export const adminTemplateRoutes = new Hono<AdminVars>();
 adminTemplateRoutes.use('*', requireAdmin);
+
+adminTemplateRoutes.get('/:id/recommendation-metrics', async (c) => {
+  const days = Number(c.req.query('days') ?? 30);
+  if (!Number.isInteger(days) || days < 1 || days > 90) {
+    return fail(
+      c,
+      'INVALID_DAYS',
+      'days must be an integer between 1 and 90',
+      400,
+    );
+  }
+  return ok(c, await getRecommendationMetrics(c.req.param('id'), days));
+});
 
 adminTemplateRoutes.get('/', async (c) => {
   const filters = [isNull(promptTemplates.deletedAt)];
