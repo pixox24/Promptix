@@ -23,3 +23,7 @@ export function required(name:string) {
 export function redisConnection() {
   return parseRedisConnection(process.env.REDIS_URL??'redis://localhost:6379');
 }
+
+export function autopublishPermitSecret() {
+  return required('AUTOPUBLISH_PERMIT_SECRET');
+}

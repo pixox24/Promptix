@@ -1,6 +1,6 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { classifyGovernanceRisk, governanceProposalPatchSchema, governanceRuleSetSchema, templateVersionSnapshotSchema, type GovernanceField } from '@promptix/shared';
-import { db, agentRuns, governanceApprovals, governanceAuditEvents, governanceChangeSetItems, governanceChangeSets, governanceProposals, governanceRuleSets, promptTemplates, taxonomyTerms, templateTaxonomyAssignments, templateVersions } from './db.js';
+import { db, agentRuns, governanceApprovals, governanceAuditEvents, governanceChangeSetItems, governanceChangeSets, governanceExecutionPermits, governanceProposals, governanceRuleSets, promptTemplates, taxonomyTerms, templateTaxonomyAssignments, templateVersions } from './db.js';
 import { refreshGovernanceRunState } from './governance-run-state.js';
 
 function mutationPatch(action: string, patch: Record<string, unknown>) {
@@ -18,8 +18,15 @@ export async function executeGovernanceJob(changeSetId: string) {
   const [changeSet] = await db.select().from(governanceChangeSets).where(eq(governanceChangeSets.id, changeSetId)).limit(1);
   if (!changeSet) throw new Error('Change set not found');
   if (['succeeded', 'partially_succeeded', 'rollback_available', 'rolled_back'].includes(changeSet.status)) return { changeSetId, status: changeSet.status, outcomes: [] };
-  if (!['automatic', 'approval'].includes(changeSet.executionMode)) throw new Error('LEGACY_MIXED_CHANGE_SET_REQUIRES_REPAIR');
+  if (!['automatic', 'approval', 'autopilot'].includes(changeSet.executionMode)) throw new Error('LEGACY_MIXED_CHANGE_SET_REQUIRES_REPAIR');
   if (changeSet.executionMode === 'approval' && changeSet.status !== 'approved' && changeSet.status !== 'auto_executing') throw new Error('APPROVAL_REQUIRED');
+  if (changeSet.executionMode === 'autopilot') {
+    if (!changeSet.permitId) throw new Error('AUTOPILOT_PERMIT_REQUIRED');
+    const [permit] = await db.select().from(governanceExecutionPermits).where(eq(governanceExecutionPermits.id, changeSet.permitId)).limit(1);
+    if (!permit || permit.revokedAt || !permit.consumedAt || permit.autopublishRunId === null
+      || permit.ruleSetId !== changeSet.ruleSetId || permit.ruleSetVersion !== changeSet.ruleSetVersion
+      || permit.action !== 'publish') throw new Error('AUTOPILOT_PERMIT_INVALID');
+  }
   const [active] = await db.select().from(governanceRuleSets).where(eq(governanceRuleSets.enabled, true)).limit(1);
   if (!active || active.id !== changeSet.ruleSetId || active.version !== changeSet.ruleSetVersion) throw new Error('RULE_SET_CHANGED');
   const rules = governanceRuleSetSchema.parse(active.rules);
@@ -36,7 +43,7 @@ export async function executeGovernanceJob(changeSetId: string) {
     try {
       const patch = governanceProposalPatchSchema.parse(proposal.proposedPatch);
       const decision = classifyGovernanceRisk({ action: proposal.action as never, changedFields: Object.keys(patch) as GovernanceField[], confidence: Number(proposal.confidence), batchSize: rows.length }, rules);
-      if (decision.requiresApproval && changeSet.status !== 'approved') {
+      if (decision.requiresApproval && changeSet.status !== 'approved' && changeSet.executionMode !== 'autopilot') {
         await db.update(governanceChangeSetItems).set({ status: 'failed', errorCode: 'RULE_REQUIRES_APPROVAL', errorMessage: 'Rules now require approval; regenerate this plan', finishedAt: new Date() }).where(eq(governanceChangeSetItems.id, item.id));
         outcomes.push({ itemId: item.id, status: 'failed' }); continue;
       }
