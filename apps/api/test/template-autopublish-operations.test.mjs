@@ -74,6 +74,25 @@ test('delegated control creates one immutable rule version without enabling sche
   assert.equal(audits.length, 1);
 });
 
+test('run creation reads delegated control from the nested governance autopublish rules', async () => {
+  const { parseStoredAutopublishRules } = await import(
+    new URL('../dist/lib/autopublish-rule-loader.js', import.meta.url)
+  );
+  const rules = parseStoredAutopublishRules({
+    schedule: { enabled: true },
+    autopublish: {
+      delegatedEnabled: true,
+      scheduledAgentEnabled: false,
+      mode: 'shadow',
+      frozen: false,
+    },
+  });
+
+  assert.equal(rules.delegatedEnabled, true);
+  assert.equal(rules.scheduledAgentEnabled, false);
+  assert.equal(rules.mode, 'shadow');
+});
+
 test('operations routes expose overview, runs, observations, freeze and mode', async () => {
   const source = await readFile(new URL('../src/routes/autopublish.ts', import.meta.url), 'utf8');
   for (const route of ["get('/overview'", "get('/runs'", "get('/observations'", "post('/freeze'", "post('/mode'", "post('/delegated'"]) {

@@ -1,8 +1,8 @@
-import { autopublishRulesSchema } from '@promptix/shared';
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db/client.js';
 import { governanceRuleSets } from '../db/schema.js';
 import { getJobQueue } from './queue.js';
+import { parseStoredAutopublishRules } from './autopublish-rule-loader.js';
 
 export const AUTOPUBLISH_SCHEDULER_ID = 'template-autopublish-source-scan';
 export const ALLOWED_AUTOPUBLISH_SOURCE_TYPES = ['curated_queue', 'admin_source'] as const;
@@ -29,9 +29,7 @@ export async function registerAutopublishScheduler() {
   const [row] = await getDb().select().from(governanceRuleSets)
     .where(eq(governanceRuleSets.enabled, true)).limit(1);
   if (!row) return { enabled: false };
-  const rules = autopublishRulesSchema.parse(
-    (row.rules as { autopublish?: unknown }).autopublish ?? row.rules,
-  );
+  const rules = parseStoredAutopublishRules(row.rules);
   if (!rules.scheduledAgentEnabled) {
     await getJobQueue().removeJobScheduler(AUTOPUBLISH_SCHEDULER_ID);
     return { enabled: false };

@@ -176,6 +176,8 @@ stateDiagram-v2
     reviewing_quality --> adversarial_review: 临界或高影响
     reviewing_quality --> issuing_permit: 明显合格
     adversarial_review --> issuing_permit: 结论一致
+    issuing_permit --> conflict_waiting: 存在活跃治理任务
+    conflict_waiting --> issuing_permit: 冲突解除后人工重试
     issuing_permit --> publishing
     publishing --> succeeded: 前端已经可见
 
@@ -197,8 +199,11 @@ stateDiagram-v2
 - `needs_attention`：人工可以根据允许动作接管。
 - `rejected`：命中不可自动绕过的安全硬门禁。
 - `cancelled`：由授权用户、Agent 许可撤销或管理员冻结终止。
+- `failed`：系统故障且自动重试已经耗尽，可以由运维人员诊断后重试。
 
 自动发布运行在模板前端可见时立即进入 `succeeded`。模板生命周期同时进入独立的 `published_observing`，随后由观察哨兵推进到 `stable` 或 `exposure_limited`。因此运行完成不需要等待 3 天。
+
+`conflict_waiting` 不是终态，而是人工暂停态：它表示同一模板已有活跃治理任务。前端停止无意义轮询，待现有任务结束后由管理员执行 `retry_after_conflict`，运行再回到许可签发阶段。
 
 ## 6. 端到端执行
 

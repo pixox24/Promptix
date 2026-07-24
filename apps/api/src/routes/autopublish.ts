@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
-import { autopublishRulesSchema } from '@promptix/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { Hono, type Context, type Next } from 'hono';
 import { getDb } from '../db/client.js';
@@ -29,6 +28,7 @@ import { deleteObject, putObject, storageKind } from '../lib/storage.js';
 import { loadActiveTaxonomySnapshot } from '../lib/taxonomy.js';
 import { ALLOWED_AUTOPUBLISH_SOURCE_TYPES } from '../lib/autopublish-scheduler.js';
 import { databaseAutopublishOperations } from '../lib/autopublish-operations.js';
+import { parseStoredAutopublishRules } from '../lib/autopublish-rule-loader.js';
 
 export const MAX_PRIVATE_INPUT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const GRANT_LIFETIME_MS = 15 * 60 * 1000;
@@ -57,9 +57,15 @@ async function activeRules() {
   const [row] = await getDb().select().from(governanceRuleSets)
     .where(eq(governanceRuleSets.enabled, true)).limit(1);
   if (!row) throw new AutopublishServiceError('AUTOPUBLISH_RULES_NOT_FOUND');
-  const parsed = autopublishRulesSchema.safeParse(row.rules);
-  if (!parsed.success) throw new AutopublishServiceError('AUTOPUBLISH_RULES_INVALID');
-  return { id: row.id, version: row.version, rules: parsed.data };
+  try {
+    return {
+      id: row.id,
+      version: row.version,
+      rules: parseStoredAutopublishRules(row.rules),
+    };
+  } catch {
+    throw new AutopublishServiceError('AUTOPUBLISH_RULES_INVALID');
+  }
 }
 
 function productionService(): AutopublishService {
