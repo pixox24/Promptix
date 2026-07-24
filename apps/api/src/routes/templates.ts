@@ -15,6 +15,7 @@ import { buildTemplateVersionSnapshot, recordInitialTemplateVersion, updateTempl
 import { getSimilarTemplateResponse } from '../services/similar-template-service.js';
 import { recordClientRecommendationEvent } from '../services/recommendation-event-service.js';
 import { getRecommendationMetrics } from '../services/recommendation-metrics-service.js';
+import { publiclyDiscoverableTemplate } from '../lib/template-visibility.js';
 
 const templateInput = templateDraftSchema.extend({
   id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,79}$/).optional(),
@@ -149,7 +150,7 @@ publicTemplateRoutes.get('/', async (c) => {
   }
   const page = requestedPage;
   const pageSize = requestedPageSize;
-  const filters = [eq(promptTemplates.status, 'published'), isNull(promptTemplates.deletedAt)];
+  const filters = [publiclyDiscoverableTemplate()];
   if (outputType) filters.push(sql`exists (select 1 from ${taxonomyTerms} where ${taxonomyTerms.id} = ${promptTemplates.outputTypeId} and ${taxonomyTerms.dimension} = 'output_type' and ${taxonomyTerms.slug} = ${outputType})`);
   if (scenarios.length) filters.push(taxonomyExists('scenario', scenarios));
   if (styles.length) filters.push(taxonomyExists('style', styles));

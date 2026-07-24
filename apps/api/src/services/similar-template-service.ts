@@ -14,6 +14,7 @@ import {
   type RecommendationFeedback,
 } from '../lib/similar-template-ranking.js';
 import { loadTemplateSemanticViews } from '../lib/template-semantics.js';
+import { publiclyDiscoverableTemplate } from '../lib/template-visibility.js';
 
 const ALGORITHM_VERSION = 'similar-v1' as const;
 const REQUEST_TTL_MS = 4 * 60 * 60 * 1_000;
@@ -145,8 +146,7 @@ const databaseRepository: SimilarTemplateRepository = {
 
   async findCandidates(source) {
     const rows = await getDb().select().from(promptTemplates).where(and(
-      eq(promptTemplates.status, 'published'),
-      isNull(promptTemplates.deletedAt),
+      publiclyDiscoverableTemplate(),
       ne(promptTemplates.id, source.id),
       eq(promptTemplates.workflowType, source.semantic?.workflowType ?? 'generate'),
     )).limit(200);

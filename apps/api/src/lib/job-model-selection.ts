@@ -18,6 +18,10 @@ export function defaultRoleForJob(jobType: JobType): JobModelRole | null {
     case 'image_reverse':
     case 'provider_test':
     case 'template_governance_plan':
+    case 'template_autopublish_repair':
+    case 'template_autopublish_screen':
+    case 'template_autopublish_quality':
+    case 'template_autopublish_counter_review':
       return 'text';
     case 'image_generate':
       return 'image';
@@ -34,6 +38,10 @@ export function requiredCapabilitiesForJob(jobType: JobType): ModelCapability[] 
     case 'structure':
     case 'image_reverse':
     case 'template_governance_plan':
+    case 'template_autopublish_repair':
+    case 'template_autopublish_screen':
+    case 'template_autopublish_quality':
+    case 'template_autopublish_counter_review':
       return ['text', 'structured_output'];
     case 'provider_test':
       return ['text'];

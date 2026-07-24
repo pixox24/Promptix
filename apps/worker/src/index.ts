@@ -25,15 +25,20 @@ const { advanceAutopublishRun } = await import('./autopublish-orchestrator.js');
 const { dispatchAutopublishOutbox } = await import('./autopublish-outbox.js');
 const { runAutopublishModelJob } = await import('./autopublish-model-jobs.js');
 const { markExpiredPrivateAutopublishInputs } = await import('./autopublish-cover.js');
+const { enqueueDueObservations } = await import('./autopublish-observation.js');
 
 const QUEUE_NAME='promptix-jobs';
 type WorkerPayload =
   | { jobId: string }
   | { kind: 'governance_schedule'; ruleSetId: string; ruleSetVersion: number }
-  | { kind: 'autopublish_run'; runId: string };
+  | { kind: 'autopublish_run'; runId: string }
+  | { kind: 'autopublish_observation'; templateId: string };
 const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
   if ('kind' in job.data && job.data.kind === 'autopublish_run') {
     return advanceAutopublishRun(job.data.runId);
+  }
+  if ('kind' in job.data && job.data.kind === 'autopublish_observation') {
+    return { templateId: job.data.templateId, queuedForEvaluation: true };
   }
   if (!('jobId' in job.data)) {
     const [rules] = await db.select().from(governanceRuleSets).where(eq(governanceRuleSets.id, job.data.ruleSetId)).limit(1);
@@ -180,6 +185,16 @@ const privateCleanupTimer = setInterval(() => {
   });
 }, 60 * 60 * 1000);
 privateCleanupTimer.unref();
+const observationTimer = setInterval(() => {
+  void enqueueDueObservations().catch((error) => {
+    console.error(JSON.stringify({
+      level: 'error',
+      event: 'autopublish_observation_scan_failed',
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  });
+}, 60_000);
+observationTimer.unref();
 
-async function shutdown(){clearInterval(outboxTimer);clearInterval(privateCleanupTimer);await worker.close();process.exit(0);}
+async function shutdown(){clearInterval(outboxTimer);clearInterval(privateCleanupTimer);clearInterval(observationTimer);await worker.close();process.exit(0);}
 process.on('SIGINT',shutdown); process.on('SIGTERM',shutdown);
