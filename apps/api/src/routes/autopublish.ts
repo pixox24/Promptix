@@ -8,6 +8,7 @@ import {
   agentCapabilityGrants,
   governanceRuleSets,
   mediaObjects,
+  templateAutopublishSourceItems,
 } from '../db/schema.js';
 import { requireOwner, type AdminVars } from '../lib/auth.js';
 import { AutopublishCapabilityError } from '../lib/autopublish-capabilities.js';
@@ -24,6 +25,7 @@ import { loadIngestSystemPrompt } from '../lib/ingest-system-prompts.js';
 import { enqueueAutopublishRun } from '../lib/job-enqueue.js';
 import { deleteObject, putObject, storageKind } from '../lib/storage.js';
 import { loadActiveTaxonomySnapshot } from '../lib/taxonomy.js';
+import { ALLOWED_AUTOPUBLISH_SOURCE_TYPES } from '../lib/autopublish-scheduler.js';
 
 export const MAX_PRIVATE_INPUT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const GRANT_LIFETIME_MS = 15 * 60 * 1000;
@@ -264,6 +266,28 @@ autopublishRoutes.post('/runs', async (c) => {
     }, 202);
   } catch (error) {
     if (candidate) await candidate.cleanup().catch(() => undefined);
+    return errorResponse(c, error);
+  }
+});
+
+autopublishRoutes.post('/source-items', async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    const sourceType = typeof body.sourceType === 'string' ? body.sourceType.trim() : '';
+    const sourceItemId = typeof body.sourceItemId === 'string' ? body.sourceItemId.trim() : '';
+    const flowType = body.flowType === 'image_reverse' ? 'image_reverse' : 'text_expand';
+    if (!ALLOWED_AUTOPUBLISH_SOURCE_TYPES.includes(sourceType as never)) {
+      throw new AutopublishServiceError('AUTOPUBLISH_SOURCE_FORBIDDEN');
+    }
+    if (!sourceItemId || sourceItemId.length > 200) {
+      throw new AutopublishServiceError('AUTOPUBLISH_INPUT_INVALID');
+    }
+    const payload = typeof body.payload === 'object' && body.payload !== null ? body.payload : {};
+    const [item] = await getDb().insert(templateAutopublishSourceItems).values({
+      sourceType, sourceItemId, flowType, payload,
+    }).onConflictDoNothing().returning();
+    return c.json({ data: item ?? { sourceType, sourceItemId, flowType, replayed: true } }, 202);
+  } catch (error) {
     return errorResponse(c, error);
   }
 });

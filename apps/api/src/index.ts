@@ -19,6 +19,7 @@ import { mkdirSync } from 'node:fs';
 import { localStorageRoot } from './lib/storage.js';
 import path from 'node:path';
 import { registerGovernanceScheduler } from './lib/governance-scheduler.js';
+import { registerAutopublishScheduler } from './lib/autopublish-scheduler.js';
 
 loadEnvFile();
 
@@ -89,6 +90,7 @@ function start() {
     console.log(`[api] listening on http://localhost:${info.port}`);
   });
   void registerGovernanceScheduler();
+  void registerAutopublishScheduler();
 }
 
 start();

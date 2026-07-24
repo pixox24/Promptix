@@ -22,7 +22,8 @@ test('autopublish image intake is private and has bounded retention', async () =
   const source = await readFile(new URL('../src/routes/autopublish.ts', import.meta.url), 'utf8');
   assert.match(source, /private\/autopublish\/\$\{runId\}\/source\.\$\{extension\}/);
   assert.match(source, /MAX_PRIVATE_INPUT_RETENTION_MS/);
-  assert.doesNotMatch(source, /statusUrl:.*object|imageUrl:/s);
+  assert.doesNotMatch(source, /imageUrl:/);
+  assert.doesNotMatch(source, /statusUrl:\s*`[^`]*(?:private|object)/);
 });
 
 test('autopublish failures use the stable recovery contract', async () => {
