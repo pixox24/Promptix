@@ -86,8 +86,8 @@ export function AutopublishPage({ canFreeze }: { canFreeze: boolean }) {
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div><p className="text-xs font-bold uppercase tracking-[.2em] text-violet-600">Operations</p><h1 className="mt-1 text-2xl font-semibold">自动发布控制台</h1></div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" className={`rounded-lg border px-3 py-2 text-sm ${mode === 'shadow' ? 'bg-slate-900 text-white' : 'bg-white'}`} onClick={() => changeMode('shadow')}>shadow</button>
-          <button type="button" className={`rounded-lg border px-3 py-2 text-sm ${mode === 'live' ? 'bg-emerald-700 text-white' : 'bg-white'}`} onClick={() => changeMode('live')}>live</button>
+          <button type="button" aria-pressed={mode === 'shadow'} className={`rounded-lg border px-3 py-2 text-sm ${mode === 'shadow' ? 'bg-slate-900 text-white' : 'bg-white'}`} onClick={() => changeMode('shadow')}>shadow</button>
+          <button type="button" aria-pressed={mode === 'live'} className={`rounded-lg border px-3 py-2 text-sm ${mode === 'live' ? 'bg-emerald-700 text-white' : 'bg-white'}`} onClick={() => changeMode('live')}>live</button>
           {canFreeze && <button type="button" className="rounded-lg bg-red-700 px-3 py-2 text-sm text-white" onClick={toggleFreeze}>{frozen ? '解除总冻结' : '总冻结'}</button>}
         </div>
       </header>
