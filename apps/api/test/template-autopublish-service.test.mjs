@@ -219,7 +219,6 @@ test('same idempotency key with a different payload is rejected', async () => {
       sourceItemId: 'request-1',
       requestedBy: IDS.admin,
       agentId: 'delegated-agent',
-      capabilityGrantId: IDS.grant,
     })}`,
   });
   await service.create(delegatedInput());
@@ -227,6 +226,38 @@ test('same idempotency key with a different payload is rejected', async () => {
     () => service.create(delegatedInput({ text: 'A different prompt' })),
     /AUTOPUBLISH_IDEMPOTENCY_MISMATCH/,
   );
+  assert.equal(repository.runs.length, 1);
+});
+
+test('idempotent replay ignores one-shot grant and private object identities', async () => {
+  const { createAutopublishService, autopublishInputFingerprint, normalizeAutopublishInput } =
+    await import(serviceModuleUrl);
+  const secondGrantId = '00000000-0000-4000-8000-000000000099';
+  const hash = (value) => `hash:${JSON.stringify(value)}`;
+  const firstInput = delegatedInput({
+    runId: '00000000-0000-4000-8000-000000000010',
+    privateInputObjectKey: 'private/autopublish/first/source.png',
+    imageContentHash: 'same-image',
+  });
+  const secondInput = delegatedInput({
+    runId: '00000000-0000-4000-8000-000000000011',
+    capabilityGrantId: secondGrantId,
+    privateInputObjectKey: 'private/autopublish/second/source.png',
+    imageContentHash: 'same-image',
+  });
+  const inputSnapshotHash = hash(
+    autopublishInputFingerprint(normalizeAutopublishInput(firstInput).inputSnapshot),
+  );
+  const repository = fakeRepository([
+    makeGrant({ inputSnapshotHash }),
+    makeGrant({ id: secondGrantId, inputSnapshotHash }),
+  ]);
+  const service = createAutopublishService(repository, dependencies({ hash }));
+
+  const first = await service.create(firstInput);
+  const replay = await service.create(secondInput);
+
+  assert.equal(replay.id, first.id);
   assert.equal(repository.runs.length, 1);
 });
 

@@ -254,6 +254,7 @@ export function createAutopublishRepository(): AutopublishServiceRepository {
         }
 
         const [created] = await tx.insert(templateAutopublishRuns).values({
+          ...(input.id ? { id: input.id } : {}),
           status: 'queued',
           currentStage: 'queued',
           triggerType: input.triggerType,

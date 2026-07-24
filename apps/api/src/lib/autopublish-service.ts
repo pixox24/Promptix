@@ -14,6 +14,7 @@ import {
 } from './autopublish-capabilities.js';
 
 export type CreateAutopublishRunInput = {
+  runId?: string;
   flowType: 'text_expand' | 'image_reverse';
   triggerType: 'delegated' | 'scheduled_agent';
   text?: string;
@@ -26,6 +27,8 @@ export type CreateAutopublishRunInput = {
   requestedBy: string | null;
   agentId: string | null;
   capabilityGrantId: string;
+  privateInputObjectKey?: string;
+  imageContentHash?: string;
 };
 
 export type AutopublishInputSnapshot = {
@@ -40,6 +43,8 @@ export type AutopublishInputSnapshot = {
   requestedBy: string | null;
   agentId: string | null;
   capabilityGrantId: string;
+  privateInputObjectKey?: string;
+  imageContentHash?: string;
 };
 
 export type StoredAutopublishRun = AutopublishRun & {
@@ -81,6 +86,7 @@ export type AutopublishAgentActor = { type: 'agent'; id: string; capabilityGrant
 export type AutopublishActor = AutopublishAdminActor | AutopublishAgentActor;
 
 export type AutopublishCreateRecord = {
+  id?: string;
   actor: AutopublishAgentActor;
   triggerType: CreateAutopublishRunInput['triggerType'];
   requestedBy: string | null;
@@ -158,7 +164,7 @@ function minimumBudget(ruleBudget: AutopublishBudget, grantBudget: AutopublishBu
   ) as AutopublishBudget;
 }
 
-function normalizeInput(input: CreateAutopublishRunInput): {
+export function normalizeAutopublishInput(input: CreateAutopublishRunInput): {
   inputSnapshot: AutopublishInputSnapshot;
   idempotencyKey: string;
 } {
@@ -189,8 +195,21 @@ function normalizeInput(input: CreateAutopublishRunInput): {
       requestedBy: input.requestedBy,
       agentId: input.agentId,
       capabilityGrantId: input.capabilityGrantId,
+      ...(input.privateInputObjectKey === undefined
+        ? {}
+        : { privateInputObjectKey: input.privateInputObjectKey }),
+      ...(input.imageContentHash === undefined ? {} : { imageContentHash: input.imageContentHash }),
     },
   };
+}
+
+export function autopublishInputFingerprint(snapshot: AutopublishInputSnapshot) {
+  const {
+    capabilityGrantId: _capabilityGrantId,
+    privateInputObjectKey: _privateInputObjectKey,
+    ...stableInput
+  } = snapshot;
+  return stableInput;
 }
 
 function assertTriggerEnabled(rules: AutopublishRules, triggerType: CreateAutopublishRunInput['triggerType']) {
@@ -209,9 +228,9 @@ export function createAutopublishService(
 ): AutopublishService {
   return {
     async create(input) {
-      const normalized = normalizeInput(input);
+      const normalized = normalizeAutopublishInput(input);
       const { inputSnapshot, idempotencyKey } = normalized;
-      const inputSnapshotHash = dependencies.hash(inputSnapshot);
+      const inputSnapshotHash = dependencies.hash(autopublishInputFingerprint(inputSnapshot));
 
       const replay = await repository.findByIdempotencyKey(idempotencyKey);
       if (replay) {
@@ -254,6 +273,7 @@ export function createAutopublishService(
           dependencies.loadPromptVersion(inputSnapshot.flowType),
         ]);
         return await repository.createRun({
+          id: input.runId,
           actor: {
             type: 'agent',
             id: grant.agentId,

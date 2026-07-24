@@ -13,6 +13,7 @@ import { jobRoutes } from './routes/jobs.js';
 import { ingestRoutes } from './routes/ingest.js';
 import { generationRoutes } from './routes/generations.js';
 import { governanceRoutes } from './routes/governance.js';
+import { autopublishRoutes } from './routes/autopublish.js';
 import { adminTaxonomyRoutes, publicTaxonomyRoutes } from './routes/taxonomy.js';
 import { mkdirSync } from 'node:fs';
 import { localStorageRoot } from './lib/storage.js';
@@ -65,6 +66,7 @@ app.route('/api/admin/models', modelRoutes);
 app.route('/api/admin/jobs', jobRoutes);
 app.route('/api/admin/ingest', ingestRoutes);
 app.route('/api/admin/governance', governanceRoutes);
+app.route('/api/admin/autopublish', autopublishRoutes);
 app.route('/api/generations', generationRoutes);
 try { mkdirSync(localStorageRoot(), { recursive: true }); } catch { /* health remains available with incomplete env */ }
 app.use('/uploads/*', serveStatic({ root: path.dirname(localStorageRoot()) }));

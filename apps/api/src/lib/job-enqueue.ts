@@ -25,3 +25,13 @@ export async function enqueueGenerationJob(
     removeOnFail: 500,
   });
 }
+
+export async function enqueueAutopublishRun(runId: string): Promise<void> {
+  await getJobQueue().add('autopublish', { runId }, {
+    jobId: `autopublish:${runId}`,
+    attempts: loadEnv().JOB_ATTEMPTS,
+    backoff: { type: 'exponential', delay: 1000 },
+    removeOnComplete: 100,
+    removeOnFail: 500,
+  });
+}
