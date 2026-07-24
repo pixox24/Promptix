@@ -401,6 +401,10 @@ export const jobTypeSchema = z.enum([
   'template_governance_plan',
   'template_governance_apply',
   'template_governance_rollback',
+  'template_autopublish_repair',
+  'template_autopublish_screen',
+  'template_autopublish_quality',
+  'template_autopublish_counter_review',
 ]);
 export type JobType = z.infer<typeof jobTypeSchema>;
 

@@ -23,6 +23,7 @@ const { executeGovernanceJob, rollbackGovernanceJob } = await import('./governan
 const { buildScheduledGovernanceInput, releaseScheduledGovernanceLease } = await import('./scheduled-governance.js');
 const { advanceAutopublishRun } = await import('./autopublish-orchestrator.js');
 const { dispatchAutopublishOutbox } = await import('./autopublish-outbox.js');
+const { runAutopublishModelJob } = await import('./autopublish-model-jobs.js');
 
 const QUEUE_NAME='promptix-jobs';
 type WorkerPayload =
@@ -93,6 +94,13 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
         const persisted = await persistGovernancePlan(targetId, proposals);
         const execution = persisted.automaticChangeSetId ? await executeGovernanceJob(persisted.automaticChangeSetId) : null;
         output = { proposals, persisted, execution };
+      } else if (
+        jobType === 'template_autopublish_repair'
+        || jobType === 'template_autopublish_screen'
+        || jobType === 'template_autopublish_quality'
+        || jobType === 'template_autopublish_counter_review'
+      ) {
+        output = await runAutopublishModelJob(jobType, primary, record.input as Record<string, unknown>);
       } else if (jobType === 'image_generate') {
         output = await generateImage(primary, record.input as Record<string, unknown>);
         output = await persistGeneratedOutput(
