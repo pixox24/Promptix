@@ -27,3 +27,9 @@ test('builds per-template model signals instead of sending an empty placeholder'
   assert.ok(signals[0].issues.length > 0);
   assert.deepEqual(signals[0].duplicateCandidates, []);
 });
+
+test('automatic taxonomy evidence satisfies the taxonomy prerequisite', async () => {
+  const { evaluateTemplateQuality } = await import(moduleUrl);
+  const issues = evaluateTemplateQuality({ ...base, taxonomyReviewStatus: 'auto_verified' });
+  assert.equal(issues.some((issue) => issue.code === 'TAXONOMY_MISSING'), false);
+});

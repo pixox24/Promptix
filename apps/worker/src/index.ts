@@ -24,6 +24,7 @@ const { buildScheduledGovernanceInput, releaseScheduledGovernanceLease } = await
 const { advanceAutopublishRun } = await import('./autopublish-orchestrator.js');
 const { dispatchAutopublishOutbox } = await import('./autopublish-outbox.js');
 const { runAutopublishModelJob } = await import('./autopublish-model-jobs.js');
+const { markExpiredPrivateAutopublishInputs } = await import('./autopublish-cover.js');
 
 const QUEUE_NAME='promptix-jobs';
 type WorkerPayload =
@@ -169,6 +170,16 @@ const outboxTimer = setInterval(() => {
   });
 }, 1_000);
 outboxTimer.unref();
+const privateCleanupTimer = setInterval(() => {
+  void markExpiredPrivateAutopublishInputs().catch((error) => {
+    console.error(JSON.stringify({
+      level: 'error',
+      event: 'autopublish_private_cleanup_failed',
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  });
+}, 60 * 60 * 1000);
+privateCleanupTimer.unref();
 
-async function shutdown(){clearInterval(outboxTimer);await worker.close();process.exit(0);}
+async function shutdown(){clearInterval(outboxTimer);clearInterval(privateCleanupTimer);await worker.close();process.exit(0);}
 process.on('SIGINT',shutdown); process.on('SIGTERM',shutdown);

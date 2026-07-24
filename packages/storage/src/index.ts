@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import OSS from 'ali-oss';
@@ -19,4 +19,13 @@ export async function putObject(objectKey:string,body:Buffer|Uint8Array,contentT
     return {objectKey,url:`${base.replace(/\/$/,'')}/${objectKey}`,driver:'oss'};
   }
   const root=localStorageRoot();const target=path.resolve(root,objectKey.replace(/^\/+/,''));if(!target.startsWith(`${root}${path.sep}`))throw new Error('Invalid object key');await mkdir(path.dirname(target),{recursive:true});await writeFile(target,body);return {objectKey,url:`${(process.env.PUBLIC_API_BASE??'http://localhost:8787').replace(/\/$/,'')}/uploads/${objectKey}`,driver:'local'};
+}
+
+export async function deleteObject(objectKey:string):Promise<void>{
+  if(driver()==='oss'){
+    const client=new OSS({region:process.env.OSS_REGION??'oss-cn-hangzhou',bucket:process.env.OSS_BUCKET!,accessKeyId:process.env.OSS_ACCESS_KEY_ID!,accessKeySecret:process.env.OSS_ACCESS_KEY_SECRET!,...(process.env.OSS_ENDPOINT?{endpoint:process.env.OSS_ENDPOINT}:{})});
+    await client.delete(objectKey);
+    return;
+  }
+  const root=localStorageRoot();const target=path.resolve(root,objectKey.replace(/^\/+/,''));if(!target.startsWith(`${root}${path.sep}`))throw new Error('Invalid object key');await unlink(target).catch((error:NodeJS.ErrnoException)=>{if(error.code!=='ENOENT')throw error});
 }

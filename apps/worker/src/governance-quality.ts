@@ -40,7 +40,7 @@ export function findDuplicateCandidates(target: GovernanceQualityInput, library:
 
 export function evaluateTemplateQuality(input: GovernanceQualityInput): GovernanceQualitySignal[] {
   const signals: GovernanceQualitySignal[] = [];
-  if (input.taxonomyReviewStatus !== 'reviewed') signals.push({ code: 'TAXONOMY_MISSING', severity: 'attention', detail: '分类尚未人工确认' });
+  if (!['reviewed', 'auto_verified'].includes(input.taxonomyReviewStatus)) signals.push({ code: 'TAXONOMY_MISSING', severity: 'attention', detail: '分类尚未人工确认或自动验证' });
   if (input.unmappedTerms.length) signals.push({ code: 'TAXONOMY_UNMAPPED', severity: 'attention', detail: `存在 ${input.unmappedTerms.length} 个未映射分类词` });
   if (Object.values(input.confidence ?? {}).some((value) => typeof value === 'number' && value < 0.85)) signals.push({ code: 'TAXONOMY_LOW_CONFIDENCE', severity: 'attention', detail: '分类置信度低于自动处理阈值' });
   if (!input.coverUrl) signals.push({ code: 'COVER_MISSING', severity: 'attention', detail: '缺少封面' });
