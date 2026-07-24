@@ -259,7 +259,7 @@ function AdminShell({
           <Route path="jobs" element={<Jobs />} />
           <Route path="providers" element={<ProviderModelsPage />} />
           <Route path="agent" element={<AgentSettingsPage canManage={canManageGovernance} />} />
-          <Route path="autopublish" element={<AutopublishPage canFreeze={admin.role.toLowerCase() === 'owner'} />} />
+          <Route path="autopublish" element={<AutopublishPage canManage={canManageGovernance} canFreeze={admin.role.toLowerCase() === 'owner'} />} />
           <Route path="*" element={<Navigate to="templates" replace />} />
         </Routes></Suspense>
       </main>

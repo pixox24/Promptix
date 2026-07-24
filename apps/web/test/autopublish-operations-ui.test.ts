@@ -41,3 +41,12 @@ test('safety rejection never exposes ordinary recovery actions', async () => {
   assert.match(exceptions, /SAFETY_REJECTED/);
   assert.match(exceptions, /nextAllowedActions/);
 });
+
+test('operations page controls delegated one-click publishing independently', async () => {
+  const page = await readFile(new URL('pages/admin/AutopublishPage.tsx', src), 'utf8');
+  assert.match(page, /启用用户委托一键发布/);
+  assert.match(page, /delegatedEnabled/);
+  assert.match(page, /\/api\/admin\/autopublish\/delegated/);
+  assert.match(page, /shadow 模式只演练/);
+  assert.doesNotMatch(page, /scheduledAgentEnabled.*onClick/);
+});

@@ -18,3 +18,10 @@ test('mode controls expose their pressed state and freeze action is explicit', a
   assert.match(page, /aria-pressed=\{mode === 'live'\}/);
   assert.match(page, /确认总冻结自动发布/);
 });
+
+test('delegated publishing uses an accessible busy-aware switch', async () => {
+  const page = await readFile(new URL('pages/admin/AutopublishPage.tsx', src), 'utf8');
+  assert.match(page, /role="switch"/);
+  assert.match(page, /aria-checked=\{delegatedEnabled\}/);
+  assert.match(page, /changingDelegated/);
+});
