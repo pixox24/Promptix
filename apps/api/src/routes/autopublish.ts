@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { extname } from 'node:path';
 import { autopublishRulesSchema } from '@promptix/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { Hono, type Context, type Next } from 'hono';
 import { getDb } from '../db/client.js';
 import {
@@ -9,6 +9,8 @@ import {
   governanceRuleSets,
   mediaObjects,
   templateAutopublishSourceItems,
+  templateAutopublishRuns,
+  templateGovernanceState,
 } from '../db/schema.js';
 import { requireOwner, type AdminVars } from '../lib/auth.js';
 import { AutopublishCapabilityError } from '../lib/autopublish-capabilities.js';
@@ -26,6 +28,7 @@ import { enqueueAutopublishRun } from '../lib/job-enqueue.js';
 import { deleteObject, putObject, storageKind } from '../lib/storage.js';
 import { loadActiveTaxonomySnapshot } from '../lib/taxonomy.js';
 import { ALLOWED_AUTOPUBLISH_SOURCE_TYPES } from '../lib/autopublish-scheduler.js';
+import { databaseAutopublishOperations } from '../lib/autopublish-operations.js';
 
 export const MAX_PRIVATE_INPUT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const GRANT_LIFETIME_MS = 15 * 60 * 1000;
@@ -287,6 +290,65 @@ autopublishRoutes.post('/source-items', async (c) => {
       sourceType, sourceItemId, flowType, payload,
     }).onConflictDoNothing().returning();
     return c.json({ data: item ?? { sourceType, sourceItemId, flowType, replayed: true } }, 202);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+autopublishRoutes.get('/overview', async (c) => {
+  try {
+    return c.json({ data: await databaseAutopublishOperations().overview() });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+autopublishRoutes.get('/runs', async (c) => {
+  try {
+    const rows = await getDb().select().from(templateAutopublishRuns)
+      .orderBy(sql`${templateAutopublishRuns.createdAt} desc`).limit(100);
+    return c.json({ data: rows });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+autopublishRoutes.get('/observations', async (c) => {
+  try {
+    const rows = await getDb().select().from(templateGovernanceState)
+      .where(eq(templateGovernanceState.lifecycleState, 'published_observing'))
+      .limit(100);
+    return c.json({ data: rows });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+autopublishRoutes.post('/freeze', async (c) => {
+  try {
+    const body = await c.req.json<{ reason?: unknown; frozen?: unknown }>();
+    const reason = typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim() : 'manual control';
+    const operations = databaseAutopublishOperations();
+    const data = body.frozen === false
+      ? await operations.unfreeze({ actorId: c.get('admin').sub, reason })
+      : await operations.freeze({ actorId: c.get('admin').sub, reason });
+    return c.json({ data });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+autopublishRoutes.post('/mode', async (c) => {
+  try {
+    const body = await c.req.json<{ mode?: unknown; reason?: unknown }>();
+    if (body.mode !== 'shadow' && body.mode !== 'live') {
+      throw new AutopublishServiceError('AUTOPUBLISH_MODE_INVALID');
+    }
+    const reason = typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim() : 'manual control';
+    const data = await databaseAutopublishOperations().mode({
+      actorId: c.get('admin').sub, reason, mode: body.mode,
+    });
+    return c.json({ data });
   } catch (error) {
     return errorResponse(c, error);
   }
