@@ -36,4 +36,5 @@ test('autopublish run wakeups use a dedicated idempotent queue job', async () =>
   const source = await readFile(new URL('../src/lib/job-enqueue.ts', import.meta.url), 'utf8');
   assert.match(source, /enqueueAutopublishRun/);
   assert.match(source, /autopublish:\$\{runId\}/);
+  assert.match(source, /kind: 'autopublish_run'/);
 });

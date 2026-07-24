@@ -27,7 +27,7 @@ export async function enqueueGenerationJob(
 }
 
 export async function enqueueAutopublishRun(runId: string): Promise<void> {
-  await getJobQueue().add('autopublish', { runId }, {
+  await getJobQueue().add('autopublish', { kind: 'autopublish_run', runId }, {
     jobId: `autopublish:${runId}`,
     attempts: loadEnv().JOB_ATTEMPTS,
     backoff: { type: 'exponential', delay: 1000 },

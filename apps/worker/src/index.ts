@@ -21,10 +21,18 @@ const { IngestPipelineError } = await import('./job-errors.js');
 const { persistGovernancePlan } = await import('./governance-plan-persistence.js');
 const { executeGovernanceJob, rollbackGovernanceJob } = await import('./governance-job-execution.js');
 const { buildScheduledGovernanceInput, releaseScheduledGovernanceLease } = await import('./scheduled-governance.js');
+const { advanceAutopublishRun } = await import('./autopublish-orchestrator.js');
+const { dispatchAutopublishOutbox } = await import('./autopublish-outbox.js');
 
 const QUEUE_NAME='promptix-jobs';
-type WorkerPayload = { jobId: string } | { kind: 'governance_schedule'; ruleSetId: string; ruleSetVersion: number };
+type WorkerPayload =
+  | { jobId: string }
+  | { kind: 'governance_schedule'; ruleSetId: string; ruleSetVersion: number }
+  | { kind: 'autopublish_run'; runId: string };
 const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
+  if ('kind' in job.data && job.data.kind === 'autopublish_run') {
+    return advanceAutopublishRun(job.data.runId);
+  }
   if (!('jobId' in job.data)) {
     const [rules] = await db.select().from(governanceRuleSets).where(eq(governanceRuleSets.id, job.data.ruleSetId)).limit(1);
     if (!rules || !rules.enabled || rules.version !== job.data.ruleSetVersion) return { skipped: true, reason: 'RULE_SET_CHANGED' };
@@ -143,5 +151,16 @@ const worker=new Worker(QUEUE_NAME,async(job:Job<WorkerPayload>)=>{
 worker.on('ready',()=>console.log(JSON.stringify({level:'info',event:'worker_ready',queue:QUEUE_NAME})));
 worker.on('error',(error)=>console.error(JSON.stringify({level:'error',event:'worker_error',error:error.message})));
 
-async function shutdown(){await worker.close();process.exit(0);}
+const outboxTimer = setInterval(() => {
+  void dispatchAutopublishOutbox().catch((error) => {
+    console.error(JSON.stringify({
+      level: 'error',
+      event: 'autopublish_outbox_dispatch_failed',
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  });
+}, 1_000);
+outboxTimer.unref();
+
+async function shutdown(){clearInterval(outboxTimer);await worker.close();process.exit(0);}
 process.on('SIGINT',shutdown); process.on('SIGTERM',shutdown);
