@@ -8,6 +8,9 @@ import { useToast } from '../../../context/ToastContext';
 import { ModelSelector } from '../ModelSelector';
 import { SystemPromptPanel } from './SystemPromptPanel';
 import { TemplateDraftReview } from './TemplateDraftReview';
+import { AutopublishAction } from '../autopublish/AutopublishAction';
+import { AutopublishRunCard } from '../autopublish/AutopublishRunCard';
+import { useAutopublishRun } from '../../../hooks/useAutopublishRun';
 
 export function TextOptimizeFlow({
   models,
@@ -24,6 +27,8 @@ export function TextOptimizeFlow({
   const [modelId, setModelId] = useState('');
   const { job, track, retry } = useIngestJob();
   const { toast } = useToast();
+  const [autopublishRunId, setAutopublishRunId] = useState<string | null>(null);
+  const autopublish = useAutopublishRun(autopublishRunId);
 
   useEffect(() => {
     if (!modelId) setModelId(eligible.find(m=>m.isDefaultText)?.id ?? eligible[0]?.id ?? '');
@@ -57,6 +62,14 @@ export function TextOptimizeFlow({
       <button className="mt-3 rounded bg-violet-600 px-4 py-2 text-sm text-white" disabled={!text} onClick={submit}>提交优化</button>
       <p className="mt-3 text-sm text-gray-500">状态：{ingestFlowStatus(job)}</p>
       {job?.status === 'failed' && <button className="text-sm text-violet-600" onClick={() => retry()}>重试</button>}
+      <AutopublishAction
+        flowType="text_expand"
+        text={text}
+        modelId={modelId}
+        disabled={!text || !modelId}
+        onRunCreated={setAutopublishRunId}
+      />
+      {autopublish.run && <AutopublishRunCard run={autopublish.run} announcement={autopublish.announcement}/>}
     </div>
     {parsed?.success && <TemplateDraftReview draft={parsed.data} jobId={job?.id ?? ''} source="text_expand"/>}
   </div>;

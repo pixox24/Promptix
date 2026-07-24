@@ -9,6 +9,9 @@ import type { IngestPromptConfig } from '../../../types/ingest';
 import { TemplateDraftReview } from './TemplateDraftReview';
 import { SystemPromptPanel } from './SystemPromptPanel';
 import { ModelSelector } from '../ModelSelector';
+import { AutopublishAction } from '../autopublish/AutopublishAction';
+import { AutopublishRunCard } from '../autopublish/AutopublishRunCard';
+import { useAutopublishRun } from '../../../hooks/useAutopublishRun';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
@@ -21,6 +24,8 @@ export function ImageReverseFlow({ models, prompt, onModelsUpdated, onStatusChan
   const [error, setError] = useState('');
   const [readingClipboard, setReadingClipboard] = useState(false);
   const { job, track, retry } = useIngestJob();
+  const [autopublishRunId, setAutopublishRunId] = useState<string | null>(null);
+  const autopublish = useAutopublishRun(autopublishRunId);
   const structureModels = eligibleStructureModels(models);
   const visionModels = eligibleVisionModels(models);
 
@@ -132,6 +137,15 @@ export function ImageReverseFlow({ models, prompt, onModelsUpdated, onStatusChan
       <div className="mt-3 flex items-center gap-3"><button type="button" className="inline-flex items-center gap-2 rounded-lg border border-violet-200 px-3 py-2 text-sm text-violet-700 hover:bg-violet-50 disabled:opacity-50" onClick={pasteFromClipboard} disabled={readingClipboard || status === 'queued' || status === 'running'}><ClipboardPaste size={16}/>{readingClipboard ? '读取中…' : '从剪贴板粘贴'}</button><span className="text-xs text-gray-400">也可先点击上传区再直接粘贴</span></div>
       {file && <div className="mt-3 flex items-center justify-between text-xs text-gray-500"><span className="truncate">{file.name} · {(file.size / 1024 / 1024).toFixed(2)} MB</span><button type="button" className="text-red-600" onClick={() => setFile(undefined)}>移除图片</button></div>}
       <button type="button" className="mt-4 rounded-lg bg-violet-600 px-4 py-2 text-sm text-white disabled:opacity-50" disabled={!file || !structureModelId || !visionModelId || status === 'queued' || status === 'running'} onClick={submit}>{status === 'queued' || status === 'running' ? '反推处理中…' : '执行图片反推'}</button>
+      {file && <AutopublishAction
+        flowType="image_reverse"
+        file={file}
+        modelId={structureModelId}
+        visionModelId={visionModelId}
+        disabled={!structureModelId || !visionModelId}
+        onRunCreated={setAutopublishRunId}
+      />}
+      {autopublish.run && <AutopublishRunCard run={autopublish.run} announcement={autopublish.announcement}/>}
       {error && <InlineAlert type="error" className="mt-3">{error}</InlineAlert>}
     </div>
 
