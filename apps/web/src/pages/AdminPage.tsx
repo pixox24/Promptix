@@ -21,6 +21,7 @@ const IngestPage = lazy(() => import('./admin/IngestPage').then((module) => ({ d
 const TaxonomyPage = lazy(() => import('./admin/TaxonomyPage').then((module) => ({ default: module.TaxonomyPage })));
 const TemplateGovernancePage = lazy(() => import('./admin/TemplateGovernancePage').then((module) => ({ default: module.TemplateGovernancePage })));
 const AgentSettingsPage = lazy(() => import('./admin/AgentSettingsPage').then((module) => ({ default: module.AgentSettingsPage })));
+const AutopublishPage = lazy(() => import('./admin/AutopublishPage').then((module) => ({ default: module.AutopublishPage })));
 
 type Admin = { id: string; email: string; displayName: string; role: string };
 type Template = {
@@ -234,6 +235,7 @@ function AdminShell({
             <Nav to="/admin/jobs">任务</Nav>
             <Nav to="/admin/providers">模型</Nav>
             <Nav to="/admin/agent">Agent</Nav>
+            <Nav to="/admin/autopublish">自动发布</Nav>
           </nav>
           <span className="hidden text-xs text-gray-400 md:inline">
             {admin.email}
@@ -257,6 +259,7 @@ function AdminShell({
           <Route path="jobs" element={<Jobs />} />
           <Route path="providers" element={<ProviderModelsPage />} />
           <Route path="agent" element={<AgentSettingsPage canManage={canManageGovernance} />} />
+          <Route path="autopublish" element={<AutopublishPage canFreeze={admin.role.toLowerCase() === 'owner'} />} />
           <Route path="*" element={<Navigate to="templates" replace />} />
         </Routes></Suspense>
       </main>
