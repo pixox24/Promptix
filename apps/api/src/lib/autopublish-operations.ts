@@ -16,7 +16,11 @@ type Repository = {
 
 export function createAutopublishOperations(repository: Repository) {
   async function change(input: {
-    actorId: string; reason: string; frozen?: boolean; mode?: 'shadow' | 'live';
+    actorId: string;
+    reason: string;
+    frozen?: boolean;
+    mode?: 'shadow' | 'live';
+    delegatedEnabled?: boolean;
   }) {
     const active = await repository.activeRules();
     const current = active.rules.autopublish ?? {};
@@ -26,6 +30,9 @@ export function createAutopublishOperations(repository: Repository) {
         ...current,
         ...(input.frozen === undefined ? {} : { frozen: input.frozen }),
         ...(input.mode === undefined ? {} : { mode: input.mode }),
+        ...(input.delegatedEnabled === undefined
+          ? {}
+          : { delegatedEnabled: input.delegatedEnabled }),
       },
     };
     const created = await repository.createRules({ rules, actorId: input.actorId });
@@ -48,10 +55,21 @@ export function createAutopublishOperations(repository: Repository) {
     mode(input: { actorId: string; reason: string; mode: 'shadow' | 'live' }) {
       return change(input);
     },
+    delegated(input: { actorId: string; reason: string; enabled: boolean }) {
+      return change({ ...input, delegatedEnabled: input.enabled });
+    },
     async overview() {
-      const raw = await repository.overview();
+      const [raw, active] = await Promise.all([
+        repository.overview(),
+        repository.activeRules(),
+      ]);
+      const controls = active.rules.autopublish ?? {};
       return {
         ...raw,
+        mode: controls.mode === 'live' ? 'live' : 'shadow',
+        frozen: controls.frozen === true,
+        delegatedEnabled: controls.delegatedEnabled === true,
+        scheduledAgentEnabled: controls.scheduledAgentEnabled === true,
         triggers: {
           delegated: Number(raw.delegated ?? 0),
           scheduledAgent: Number(raw.scheduledAgent ?? 0),

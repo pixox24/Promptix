@@ -354,6 +354,26 @@ autopublishRoutes.post('/mode', async (c) => {
   }
 });
 
+autopublishRoutes.post('/delegated', async (c) => {
+  try {
+    const body = await c.req.json<{ enabled?: unknown; reason?: unknown }>();
+    if (typeof body.enabled !== 'boolean') {
+      throw new AutopublishServiceError('AUTOPUBLISH_INPUT_INVALID');
+    }
+    const reason = typeof body.reason === 'string' && body.reason.trim()
+      ? body.reason.trim()
+      : 'operations console';
+    const data = await databaseAutopublishOperations().delegated({
+      actorId: c.get('admin').sub,
+      reason,
+      enabled: body.enabled,
+    });
+    return c.json({ data });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
 autopublishRoutes.get('/runs/:id', async (c) => {
   try {
     const run = await productionService().get(c.req.param('id'));

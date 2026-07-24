@@ -34,9 +34,49 @@ test('overview always separates delegated and scheduled metrics', async () => {
   assert.equal(view.triggers.scheduledAgent, 2);
 });
 
+test('delegated control creates one immutable rule version without enabling scheduled Agent', async () => {
+  const { createAutopublishOperations } = await import(new URL('../dist/lib/autopublish-operations.js', import.meta.url));
+  const versions = [{
+    id: 'rules-1',
+    version: 4,
+    rules: {
+      autopublish: {
+        delegatedEnabled: false,
+        scheduledAgentEnabled: false,
+        mode: 'shadow',
+        frozen: false,
+      },
+    },
+  }];
+  const audits = [];
+  const operations = createAutopublishOperations({
+    async activeRules() { return versions.at(-1); },
+    async createRules(value) {
+      const next = { id: 'rules-2', version: 5, rules: value.rules };
+      versions.push(next);
+      return next;
+    },
+    async audit(value) { audits.push(value); },
+    async overview() { return {}; },
+  });
+
+  const result = await operations.delegated({
+    actorId: 'owner-1',
+    reason: 'enable delegated testing',
+    enabled: true,
+  });
+
+  assert.equal(result.rules.autopublish.delegatedEnabled, true);
+  assert.equal(result.rules.autopublish.scheduledAgentEnabled, false);
+  assert.equal(result.rules.autopublish.mode, 'shadow');
+  assert.equal(result.version, 5);
+  assert.equal(versions.length, 2);
+  assert.equal(audits.length, 1);
+});
+
 test('operations routes expose overview, runs, observations, freeze and mode', async () => {
   const source = await readFile(new URL('../src/routes/autopublish.ts', import.meta.url), 'utf8');
-  for (const route of ["get('/overview'", "get('/runs'", "get('/observations'", "post('/freeze'", "post('/mode'"]) {
+  for (const route of ["get('/overview'", "get('/runs'", "get('/observations'", "post('/freeze'", "post('/mode'", "post('/delegated'"]) {
     assert.ok(source.includes(route), route);
   }
 });
